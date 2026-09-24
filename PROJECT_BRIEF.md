@@ -4,9 +4,9 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft v0.1, for kickoff |
+| Status | Draft v0.2. CLI (Section 6.1, local topology) implemented and verified end to end; plugin, docs set, and standards web app not yet started. |
 | Owner | Hendrick |
-| Type | Reusable Claude Code plugin + CLI + shared standards |
+| Type | Reusable Claude Code plugin + CLI + shared standards + a standards web app for SME-managed, cloud-hosted standards |
 | Audience for this doc | Claude Code, running in the working directory, tasked with generating the formal project documentation set and repo scaffold |
 | License intent | Internal first, open to contribution later |
 
@@ -73,6 +73,8 @@ Cartographer is a reusable, installable package that gives any Claude Code proje
 | Archaeology | The bootstrap process that reads an existing codebase and builds the initial KG and VDB. |
 | Standards pack | A versioned set of development standards. A cross-stack baseline plus per-stack packs (python, react). |
 | Registry | An index of projects a developer or team has worked on, used for cross-project recall. |
+| Standards Registry | A versioned, cloud-hosted index of standards pack content (candidate: S3 or an S3-compatible store), separate from the project registry above. Becomes the source of truth for standards once the standards web app ships; until then, the CLI's bundled packs are the source of truth. See Section 5.6. |
+| Standards web app | A separate application, not the CLI and not the plugin, where SMEs author, review, and publish standards pack versions into the Standards Registry. See Section 6.7. |
 
 ## 5. Architecture overview
 
@@ -136,6 +138,15 @@ Deferred, and explicitly out of scope for the first phases: true bidirectional r
 |---|---|---|
 | Local only (default) | Solo dev, or teams not ready for shared infra | Local VDB and KG, no global index, no promotion |
 | Central, opt-in | Multi-dev project wanting shared knowledge | Local per developer plus a configured central VDB and KG, promotion on merge |
+
+### 5.6 Standards distribution
+
+A separate concern from the KG/VDB topology in 5.4 and 5.5, and phased independently of it.
+
+- **Today**: standards packs (cross-stack, python, react) are bundled inside the CLI package itself, at `cli/src/cartographer/standards_packs/`. `cartographer init` and `cartographer stack add <name>` copy the bundled markdown into the workspace. This is real, tested, end-to-end behavior, not a stub. Its limitation is that changing a standard requires a new CLI release.
+- **Later, phased**: a **Standards Registry**, a versioned, cloud-hosted index of pack content, becomes the source of truth. A companion **Standards web app**, a separate application from the CLI and the plugin, is where SMEs author, review, and publish pack versions into the registry without needing repo or CLI-release access.
+- When the registry ships, the CLI fetches from it (`stack add`, `init`) and falls back to its bundled defaults when the registry is unset or unreachable, so a project never breaks because a network call failed.
+- Per the phasing principle in Section 11, this is deferred as a whole feature, not half-built. The CLI's current bundled-standards behavior remains the real, complete implementation until the registry and web app are built as their own complete phase.
 
 ## 6. Component specifications
 
@@ -210,7 +221,22 @@ standards/
 └── react/
 ```
 
-Each pack is markdown plus optional skills and hooks. Contributors add stacks by PR. Packs are versioned so a project can pin a version.
+Each pack is markdown plus optional skills and hooks. Packs are versioned so a project can pin a version.
+
+Today, these packs are bundled inside the CLI package (`cli/src/cartographer/standards_packs/`) and contributed by PR, per Section 5.6. Once the Standards Registry and web app (Section 6.7) ship, packs are authored and published there instead; PR-based contribution remains the fallback path for the CLI's bundled defaults.
+
+### 6.7 Standards web app
+
+A separate application from the CLI and the plugin. Not part of the deliverable set in Section 16; generate its own specification document under `docs/components/` once this phase is scheduled.
+
+Purpose: let SMEs author, review, and publish standards pack content into the Standards Registry (Section 5.6) without needing repo or CLI-release access.
+
+Summary of what its spec needs to define when this phase starts:
+- Authoring flow: create or edit a pack's markdown content, per stack.
+- Review flow: a draft state before a version is published, and who can approve it.
+- Publish flow: writes a new, immutable version of the pack into the Standards Registry, keyed by pack name and version.
+- Read path: the CLI fetches published versions from the registry; the web app may also serve a browsable, human-readable view of current standards.
+- Auth: who can author, who can approve. Open, see Section 14.
 
 ## 7. Data model
 
@@ -268,6 +294,8 @@ Generate `docs/SECURITY_AND_ISOLATION.md`. Treat this as a hard requirement, not
 
 Generate `docs/ROADMAP.md`. Phase boundaries are firm. Do not pull deferred work forward without an explicit decision.
 
+**Phasing principle.** When a phase closes, everything in its scope must work end to end, for real, against real state. Do not ship a feature as a stub or a placeholder and call the phase done. If a feature cannot be finished within a phase's boundary, the whole feature moves to a later phase; a partially working version of it does not count as progress.
+
 | Phase | Scope | Exit criteria |
 |---|---|---|
 | Phase 1: MVP, local only | CLI `init` with detect and merge, cross-stack baseline plus Python and React packs, local VDB and KG via MCP, archaeology skill, ingest and preload and retrieve hooks, recall over local | A real session demonstrably recalls prior knowledge without the model being told to. Prove the loop. |
@@ -275,6 +303,13 @@ Generate `docs/ROADMAP.md`. Phase boundaries are firm. Do not pull deferred work
 | Phase 3: sync and lifecycle | Deletions, renames, history-rewrite handling, reconciliation, conflict policy | Deferred. Design spike only until Phase 2 is stable. |
 
 The single most important Phase 1 validation is that recall actually happens in a live session. That is the exact place these systems usually fail, so treat it as the acceptance gate for the whole approach.
+
+The standards distribution track (Section 5.6) is phased independently of the phases above, since it is a packaging-and-authoring concern, not a KG/VDB concern:
+
+| Phase | Scope | Exit criteria |
+|---|---|---|
+| Standards, local (done) | Cross-stack, python, and react packs bundled inside the CLI package; `init` and `stack add` copy from the bundled install | Implemented and verified end to end; see `cli/README.md`. Changing a standard still requires a CLI release. |
+| Standards Registry and web app | A versioned, cloud-hosted index of pack content (candidate: S3 or an S3-compatible store); a separate web app for SME authoring, review, and publish; CLI fetches from the registry with bundled defaults as fallback | An SME publishes a new pack version through the web app, with no CLI release, and a project's next `cartographer stack add` picks it up. |
 
 ## 12. Success criteria
 
@@ -308,6 +343,9 @@ Put these in `docs/OPEN_QUESTIONS.md` and do not resolve them silently.
 5. Registry location in local-only topology: per-machine or per-user-home.
 6. Marketplace hosting: internal git host, path, and access model.
 7. Versioning and pinning policy for standards packs.
+8. Standards Registry storage: S3, an S3-compatible store (R2, MinIO), or a lightweight database-backed service.
+9. Standards web app auth and review model: who can author, who can approve a pack version before it publishes.
+10. CLI fallback behavior: exact conditions under which `stack add`/`init` fall back to bundled defaults versus fail loudly when a Standards Registry is configured but unreachable.
 
 ## 15. Writing conventions for all generated documents
 
@@ -338,7 +376,8 @@ docs/
 │   ├── skills.md
 │   ├── hooks.md
 │   ├── mcp-servers.md
-│   └── standards-packs.md
+│   ├── standards-packs.md
+│   └── standards-webapp.md       # future phase, not generated this session; see Section 6.7
 ├── contracts/
 │   ├── vdb-tools.md              # MCP tool contracts for the VDB server
 │   └── kg-tools.md               # MCP tool contracts for the KG server
@@ -353,8 +392,9 @@ Repository scaffold (stubs and manifests, no logic):
 cartographer/
 ├── PROJECT_BRIEF.md              # this brief, copied in for reference
 ├── cartographer-plugin/          # the plugin, per Section 6.2
-├── cli/                          # CLI entry point and command stubs, per Section 6.1
+├── cli/                          # real CLI implementation (init, detect, stack add, promote, recall, doctor), per Section 6.1 -- already built, see cli/README.md
 ├── standards/                    # cross-stack baseline plus python and react packs
+├── standards-webapp/             # NOT part of this deliverable set; placeholder for the Section 6.7 / 5.6 phase
 ├── cartographer.example.toml     # commented example config
 └── docs/                         # as above
 ```
