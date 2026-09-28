@@ -95,6 +95,24 @@ def query(
     return search.to_list()
 
 
+def scan(
+    db_path: Path,
+    scope: str,
+    columns: list[str] | None = None,
+    where: str | None = None,
+) -> list[dict]:
+    """Full table scan with no vector search — for counts/aggregation, not similarity ranking."""
+    if scope not in _table_names(_connect(db_path)):
+        return []
+    table = ensure_collection(db_path, scope)
+    search = table.search()
+    if columns:
+        search = search.select(columns)
+    if where:
+        search = search.where(where)
+    return search.to_list()
+
+
 def delete(db_path: Path, scope: str, ids: list[str]) -> None:
     if not ids:
         return

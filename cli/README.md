@@ -163,16 +163,18 @@ WHERE b.attrs CONTAINS 'BaseValidator' RETURN a.path LIMIT 10
 
 ## Optional extras
 
-| Extra | What it adds |
-|---|---|
-| `embeddings` | `fastembed` for semantic VDB search (required for `vdb_search`) |
-| `mcp` | MCP SDK for the HTTP servers (required for `cartographer serve`) |
-| `parsers-ts` | tree-sitter TypeScript/TSX grammar for AST extraction in TS projects |
-| `parsers-go` | tree-sitter Go grammar |
-| `parsers-rust` | tree-sitter Rust grammar |
-| `parsers-all` | All tree-sitter grammars |
+| Extra | What it adds | When you need it |
+|---|---|---|
+| `embeddings` | `fastembed` for semantic VDB search | Required for `vdb_search` |
+| `mcp` | MCP SDK for the HTTP servers | Required for `cartographer serve` |
+| `parsers-ts` | tree-sitter TypeScript/TSX grammar | TypeScript/TSX projects (AST edges) |
+| `parsers-go` | tree-sitter Go grammar | Go projects |
+| `parsers-rust` | tree-sitter Rust grammar | Rust projects |
+| `parsers-all` | All tree-sitter grammars | Polyglot projects |
 
-Python projects work out of the box — the Python parser uses stdlib `ast`, no extra install needed. For TypeScript/Go/Rust projects, install the matching grammar extra.
+Python projects get full AST extraction out of the box — the Python parser uses stdlib `ast`, no extra install needed. For TypeScript/Go/Rust projects, install the matching grammar extra.
+
+`psycopg2-binary` and `neo4j` are included in core dependencies — central topology works without any extra install step.
 
 ---
 

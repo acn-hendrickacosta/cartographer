@@ -54,12 +54,30 @@ class RegexParser:
                         line=text[: m.start()].count("\n") + 1,
                     ))
 
+        ext = path.suffix.lower()
+        # Choose the candidate source extension for import path resolution.
+        # For TypeScript projects this prevents resolving './Button' as 'Button.py'.
+        if ext in {".ts", ".tsx"}:
+            _src_ext = ".ts"
+        elif ext in {".js", ".jsx"}:
+            _src_ext = ".js"
+        elif ext in {".go"}:
+            _src_ext = ".go"
+        elif ext in {".rs"}:
+            _src_ext = ".rs"
+        else:
+            _src_ext = ".py"
+
         for pat in _IMPORT_PATTERNS:
             for m in pat.finditer(text):
                 raw = m.group(1).strip()
-                if not (raw.startswith(".") or raw.startswith("cartographer")):
+                if not raw.startswith("."):
+                    # Only resolve relative imports — absolute/package imports have no local path
                     continue
-                dep_path = raw.replace(".", "/").lstrip("/") + ".py"
+                # Preserve the raw relative path; just strip any trailing extension
+                dep_path = raw.rstrip("/")
+                if not any(dep_path.endswith(s) for s in (".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs")):
+                    dep_path += _src_ext
                 result.imports.append(ImportEdge(module=dep_path, names=[]))
 
         return result

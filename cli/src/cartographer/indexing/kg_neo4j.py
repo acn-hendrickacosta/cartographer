@@ -156,5 +156,7 @@ class Neo4jDriver:
                 session.run("RETURN 1")
             drv.close()
             return True
+        except ImportError:
+            raise  # let caller surface the missing-package message
         except Exception:
             return False

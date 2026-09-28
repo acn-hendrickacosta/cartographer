@@ -49,6 +49,30 @@ def _resolve_workspace(explicit: str = "") -> Path:
     return _ENV_WORKSPACE
 
 
+SCOPE_WRITE_FORBIDDEN = "SCOPE_WRITE_FORBIDDEN"
+
+
+def _check_scope_write(workspace: Path, scope: str, promotion_token: str) -> str | None:
+    """Return a SCOPE_WRITE_FORBIDDEN error string if a global-scope write is not authorized.
+
+    Enforcement point for Phase 2 scope write protection (DATA_MODEL.md §6.1).
+    Any tool that writes to global scope MUST call this before writing. If it returns
+    a non-None string, the tool must return that string immediately without writing.
+
+    All current KG tools are read-only. This function is the guard for future write tools.
+    """
+    if scope != "global":
+        return None
+    try:
+        from cartographer import config as config_mod
+        override = config_mod.load_local_override(workspace)
+        if override.promotion_token and override.promotion_token == promotion_token:
+            return None
+    except Exception:
+        pass
+    return json.dumps({"error": SCOPE_WRITE_FORBIDDEN, "detail": "Global scope writes require a valid promotion token. Use 'cartographer promote' to write to global scope."})
+
+
 @mcp.tool()
 def kg_query(cypher: str, workspace: str = "") -> str:
     """Execute a read-only Cypher query on the knowledge graph.

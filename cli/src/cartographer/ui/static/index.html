@@ -4,278 +4,42 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cartographer — Knowledge Browser</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f0f; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
-  header { background: #1a1a2e; padding: 12px 24px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #2a2a4a; }
-  header h1 { font-size: 1.1rem; font-weight: 600; color: #a0a0ff; letter-spacing: 0.05em; }
-  nav { display: flex; gap: 4px; }
-  nav button { padding: 6px 14px; border: 1px solid #3a3a5a; background: transparent; color: #a0a0c0; border-radius: 4px; cursor: pointer; font-size: 0.85rem; transition: all 0.15s; }
-  nav button.active, nav button:hover { background: #2a2a6a; color: #d0d0ff; border-color: #5050aa; }
-  main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
-  .view { display: none; flex: 1; overflow-y: auto; padding: 24px; }
-  .view.active { display: flex; flex-direction: column; gap: 16px; }
-
-  /* Search */
-  .search-bar { display: flex; gap: 8px; }
-  .search-bar input { flex: 1; padding: 10px 14px; background: #1a1a1a; border: 1px solid #3a3a5a; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem; outline: none; }
-  .search-bar input:focus { border-color: #6060cc; }
-  .search-bar button { padding: 10px 18px; background: #4040aa; border: none; border-radius: 6px; color: white; cursor: pointer; font-size: 0.9rem; }
-  .search-bar button:hover { background: #5050cc; }
-  .result-card { background: #1a1a2a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 14px 16px; }
-  .result-card .meta { font-size: 0.75rem; color: #6060a0; margin-bottom: 6px; display: flex; gap: 12px; }
-  .result-card .meta .badge { padding: 2px 6px; border-radius: 3px; background: #2a2a4a; color: #8080c0; }
-  .result-card .score { color: #40c060; }
-  .result-card .text { font-size: 0.85rem; color: #c0c0c0; white-space: pre-wrap; line-height: 1.5; max-height: 120px; overflow: hidden; }
-
-  /* Graph */
-  #graph-controls { display: flex; gap: 8px; align-items: center; }
-  #graph-controls input { flex: 1; padding: 8px 12px; background: #1a1a1a; border: 1px solid #3a3a5a; border-radius: 6px; color: #e0e0e0; font-size: 0.85rem; outline: none; }
-  #graph-svg { flex: 1; background: #111118; border: 1px solid #2a2a4a; border-radius: 8px; min-height: 400px; }
-  #node-detail { background: #1a1a2a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 14px; font-size: 0.82rem; }
-  #node-fallback { display: none; background: #1a1a2a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 14px; max-height: 300px; overflow-y: auto; }
-  #node-fallback ul { list-style: none; }
-  #node-fallback li { padding: 6px 0; border-bottom: 1px solid #2a2a3a; color: #c0c0e0; font-size: 0.82rem; }
-
-  /* Registry / Stats */
-  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-  th { text-align: left; padding: 8px 12px; background: #1a1a2a; color: #8080b0; font-weight: 500; border-bottom: 1px solid #2a2a4a; }
-  td { padding: 8px 12px; border-bottom: 1px solid #1a1a2a; color: #c0c0c0; }
-  tr:hover td { background: #1a1a2a; }
-  .empty { color: #505070; font-style: italic; padding: 24px; text-align: center; }
-  .error { color: #ff6060; }
-</style>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23cc8c3f'/%3E%3Ctext x='12' y='17' font-size='13' font-family='system-ui' font-weight='700' fill='%2314120f' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E">
+  <script type="module" crossorigin src="/static/assets/index-BGGOIMWk.js"></script>
+  <link rel="stylesheet" crossorigin href="/static/assets/index-BINbh3sr.css">
 </head>
 <body>
-
-<header>
-  <h1>Cartographer</h1>
-  <nav>
-    <button class="active" onclick="show('search', this)">Search</button>
-    <button onclick="show('graph', this)">Graph</button>
-    <button onclick="show('registry', this)">Registry</button>
-    <button onclick="show('stats', this)">Stats</button>
-  </nav>
-</header>
-
-<main>
-  <!-- SEARCH VIEW -->
-  <div id="view-search" class="view active">
-    <div class="search-bar">
-      <input id="search-input" type="text" placeholder="Search your knowledge base…" onkeydown="if(event.key==='Enter') doSearch()">
-      <button onclick="doSearch()">Search</button>
+  <div class="bg-glow" aria-hidden="true"></div>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">C</div>
+      <div class="brand-name">Cartographer</div>
     </div>
-    <div id="search-results"></div>
-  </div>
-
-  <!-- GRAPH VIEW -->
-  <div id="view-graph" class="view">
-    <div id="graph-controls">
-      <input id="graph-node-input" type="text" placeholder="Node ID (e.g. path:src/main.py)">
-      <select id="graph-depth" style="padding:8px;background:#1a1a1a;border:1px solid #3a3a5a;border-radius:6px;color:#e0e0e0">
-        <option value="1">depth 1</option>
-        <option value="2">depth 2</option>
-        <option value="3">depth 3</option>
-      </select>
-      <button onclick="loadGraph()" style="padding:8px 16px;background:#4040aa;border:none;border-radius:6px;color:white;cursor:pointer">Load</button>
+    <div id="project-info" class="project-info">
+      <div class="p-name">Loading…</div>
     </div>
-    <svg id="graph-svg"></svg>
-    <div id="node-detail"><span style="color:#505070">Click a node to see details.</span></div>
-    <div id="node-fallback"></div>
-  </div>
+    <nav class="side-nav" id="side-nav">
+      <button class="nav-item active" data-view="explore">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Explore
+      </button>
+      <button class="nav-item" data-view="registry">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
+        Registry
+      </button>
+      <button class="nav-item" data-view="stats">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="20" x2="5" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="19" y1="20" x2="19" y2="14"/></svg>
+        Stats
+      </button>
+    </nav>
+    <div class="sidebar-footer">local knowledge browser</div>
+  </aside>
 
-  <!-- REGISTRY VIEW -->
-  <div id="view-registry" class="view">
-    <div id="registry-content"><span class="empty">Loading…</span></div>
-  </div>
+  <main class="content">
+    <div id="view-explore" class="view active"></div>
+    <div id="view-registry" class="view"></div>
+    <div id="view-stats" class="view"></div>
+  </main>
 
-  <!-- STATS VIEW -->
-  <div id="view-stats" class="view">
-    <div id="stats-content"><span class="empty">Loading…</span></div>
-  </div>
-</main>
-
-<script>
-// ---- Tab navigation ----
-function show(name, btn) {
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  document.getElementById('view-' + name).classList.add('active');
-  btn.classList.add('active');
-  if (name === 'registry') loadRegistry();
-  if (name === 'stats') loadStats();
-}
-
-// ---- Search ----
-async function doSearch() {
-  const q = document.getElementById('search-input').value.trim();
-  if (!q) return;
-  const container = document.getElementById('search-results');
-  container.innerHTML = '<span class="empty">Searching…</span>';
-  try {
-    const res = await fetch('/api/search?q=' + encodeURIComponent(q) + '&k=10');
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    if (!data.results || data.results.length === 0) {
-      container.innerHTML = '<span class="empty">No results found.</span>';
-      return;
-    }
-    container.innerHTML = data.results.map(r => `
-      <div class="result-card">
-        <div class="meta">
-          <span class="badge">${r.artifact_type || 'unknown'}</span>
-          <span>${r.path || ''}</span>
-          ${r.symbol ? '<span>' + r.symbol + '</span>' : ''}
-          <span class="score">score: ${(r._distance !== undefined ? (1 - r._distance).toFixed(3) : 'n/a')}</span>
-        </div>
-        <div class="text">${escapeHtml(r.text || '')}</div>
-      </div>
-    `).join('');
-  } catch (err) {
-    container.innerHTML = '<span class="error">Error: ' + escapeHtml(String(err)) + '</span>';
-  }
-}
-
-// ---- Graph ----
-let d3Loaded = false;
-
-async function loadGraph() {
-  const nodeId = document.getElementById('graph-node-input').value.trim();
-  const depth = document.getElementById('graph-depth').value;
-  if (!nodeId) return;
-
-  const svgEl = document.getElementById('graph-svg');
-  const fallback = document.getElementById('node-fallback');
-  svgEl.innerHTML = '';
-  fallback.style.display = 'none';
-
-  try {
-    const res = await fetch('/api/graph?node_id=' + encodeURIComponent(nodeId) + '&depth=' + depth);
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-
-    if (typeof d3 === 'undefined') {
-      renderFallback(data, fallback);
-      return;
-    }
-    renderD3(data, svgEl);
-  } catch (err) {
-    svgEl.innerHTML = '<text x="20" y="40" fill="#ff6060">Error: ' + escapeHtml(String(err)) + '</text>';
-  }
-}
-
-function renderFallback(data, fallback) {
-  fallback.style.display = 'block';
-  fallback.innerHTML = '<p style="color:#8080a0;margin-bottom:8px">D3 unavailable (offline). Showing node list:</p><ul>' +
-    (data.nodes || []).map(n =>
-      `<li><strong>${escapeHtml(n.type || '')}</strong> — ${escapeHtml(n.id || '')} <span style="color:#505070">${escapeHtml(n.path || '')}</span></li>`
-    ).join('') + '</ul>';
-}
-
-function renderD3(data, svgEl) {
-  const rect = svgEl.getBoundingClientRect();
-  const w = rect.width || 700, h = rect.height || 400;
-  const svg = d3.select(svgEl).attr('width', w).attr('height', h);
-
-  const nodes = (data.nodes || []).map(n => ({ ...n }));
-  const edges = (data.edges || []).map(e => ({ ...e }));
-  const nodeById = Object.fromEntries(nodes.map(n => [n.id, n]));
-
-  const typeColor = { module: '#6060cc', symbol: '#40a0a0', spec: '#cc8040', doc: '#60a060' };
-
-  const sim = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(edges).id(d => d.id).distance(80))
-    .force('charge', d3.forceManyBody().strength(-200))
-    .force('center', d3.forceCenter(w / 2, h / 2));
-
-  const link = svg.append('g').selectAll('line').data(edges).enter().append('line')
-    .attr('stroke', '#3a3a6a').attr('stroke-width', 1.5);
-
-  const node = svg.append('g').selectAll('circle').data(nodes).enter().append('circle')
-    .attr('r', 8).attr('fill', d => typeColor[d.type] || '#707070')
-    .attr('stroke', '#ffffff33').attr('stroke-width', 1)
-    .style('cursor', 'pointer')
-    .on('click', (event, d) => {
-      document.getElementById('node-detail').innerHTML =
-        `<strong>${escapeHtml(d.id || '')}</strong><br>type: ${d.type || ''} &nbsp; scope: ${d.scope || ''}<br>path: ${escapeHtml(d.path || '')}`;
-    })
-    .call(d3.drag()
-      .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
-      .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
-    );
-
-  const label = svg.append('g').selectAll('text').data(nodes).enter().append('text')
-    .attr('font-size', 10).attr('fill', '#a0a0c0').attr('dy', -10)
-    .text(d => (d.id || '').split(':').pop().split('/').pop().slice(0, 20));
-
-  sim.on('tick', () => {
-    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-    node.attr('cx', d => d.x).attr('cy', d => d.y);
-    label.attr('x', d => d.x).attr('y', d => d.y);
-  });
-}
-
-// ---- Registry ----
-async function loadRegistry() {
-  const el = document.getElementById('registry-content');
-  try {
-    const res = await fetch('/api/registry');
-    const data = await res.json();
-    if (!data.projects || data.projects.length === 0) {
-      el.innerHTML = '<span class="empty">No projects registered.</span>';
-      return;
-    }
-    el.innerHTML = `<table>
-      <tr><th>Project ID</th><th>Name</th><th>Topology</th><th>Tenant</th><th>Location</th></tr>
-      ${data.projects.map(p => `<tr>
-        <td>${escapeHtml(p.project_id || '')}</td>
-        <td>${escapeHtml(p.name || '')}</td>
-        <td>${escapeHtml(p.topology || '')}</td>
-        <td>${escapeHtml(p.tenant || '')}</td>
-        <td style="font-size:0.75rem;color:#606080">${escapeHtml(p.location || '')}</td>
-      </tr>`).join('')}
-    </table>`;
-  } catch (err) {
-    el.innerHTML = '<span class="error">Error loading registry: ' + escapeHtml(String(err)) + '</span>';
-  }
-}
-
-// ---- Stats ----
-async function loadStats() {
-  const el = document.getElementById('stats-content');
-  try {
-    const res = await fetch('/api/stats');
-    const data = await res.json();
-    const vdb = data.vdb || {};
-    const kg = data.kg || {};
-    el.innerHTML = `
-      <h3 style="color:#8080b0;font-size:0.9rem;margin-bottom:8px">VDB chunks by artifact type</h3>
-      <table>
-        <tr><th>Artifact type</th><th>Chunks</th></tr>
-        ${Object.entries(vdb).length ? Object.entries(vdb).map(([t,c]) =>
-          `<tr><td>${escapeHtml(t)}</td><td>${c}</td></tr>`).join('') :
-          '<tr><td colspan="2" class="empty">No chunks indexed</td></tr>'}
-      </table>
-      <h3 style="color:#8080b0;font-size:0.9rem;margin:16px 0 8px">KG nodes by type</h3>
-      <table>
-        <tr><th>Node type</th><th>Nodes</th></tr>
-        ${Object.entries(kg).length ? Object.entries(kg).map(([t,c]) =>
-          `<tr><td>${escapeHtml(t)}</td><td>${c}</td></tr>`).join('') :
-          '<tr><td colspan="2" class="empty">No nodes indexed</td></tr>'}
-      </table>`;
-  } catch (err) {
-    el.innerHTML = '<span class="error">Error loading stats: ' + escapeHtml(String(err)) + '</span>';
-  }
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-</script>
-
-<!-- D3 for graph rendering; degrades gracefully to node list when offline -->
-<script src="https://cdn.jsdelivr.net/npm/d3@7" onerror="console.warn('D3 not available (offline); graph view will use fallback list.')"></script>
 </body>
 </html>

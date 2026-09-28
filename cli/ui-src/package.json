@@ -1,0 +1,20 @@
+{
+  "name": "cartographer-ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Source for `cartographer ui`. Build output is committed into ../src/cartographer/ui/static so end users never need Node/npm — only maintainers editing this UI do.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  },
+  "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/space-grotesk": "^5.3.0",
+    "d3": "^7.9.0"
+  }
+}

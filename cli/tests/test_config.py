@@ -26,15 +26,23 @@ def test_config_round_trip(tmp_path: Path) -> None:
 
 def test_local_override_round_trip(tmp_path: Path) -> None:
     override = config_mod.LocalOverrideConfig()
-    override.central_vdb.endpoint = "http://localhost:6333"
+    override.central_vdb.host = "pg.example.com"
+    override.central_vdb.password = "s3cr3t"
+    override.central_kg.uri = "bolt://neo4j.example.com:7687"
+    override.promotion_token = "tok-abc123"
     config_mod.save_local_override(tmp_path, override)
 
     loaded = config_mod.load_local_override(tmp_path)
-    assert loaded.central_vdb.endpoint == "http://localhost:6333"
+    assert loaded.central_vdb.host == "pg.example.com"
+    assert loaded.central_vdb.password == "s3cr3t"
+    assert loaded.central_kg.uri == "bolt://neo4j.example.com:7687"
+    assert loaded.promotion_token == "tok-abc123"
     assert loaded.paths.local_index_dir == ".cartographer/local"
 
 
 def test_local_override_defaults_when_absent(tmp_path: Path) -> None:
     loaded = config_mod.load_local_override(tmp_path)
     assert loaded.paths.local_index_dir == ".cartographer/local"
-    assert loaded.central_vdb.endpoint == ""
+    assert loaded.central_vdb.host == "localhost"
+    assert loaded.central_vdb.password == ""
+    assert loaded.promotion_token == ""

@@ -7,6 +7,7 @@ Idempotent: all upserts are keyed on artifact identity.
 
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 
 import typer
@@ -22,9 +23,13 @@ from cartographer.indexing.kg import Node, Edge
 console = Console()
 
 
+def _now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
 def run(
     path: Path = typer.Option(Path("."), "--path", help="Workspace root"),
-    full: bool = typer.Option(True, "--full/--incremental", help="Promote all local artifacts (default) or only those changed since last promotion."),
+    full: bool = typer.Option(False, "--full/--incremental", help="Promote all local artifacts (--full) or only those changed since last promotion (--incremental, default)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Report what would be promoted without writing anything."),
 ) -> None:
     workspace = path.resolve()
@@ -68,11 +73,19 @@ def run(
     kg_path = local_dir / "kg.kuzu"
 
     project_id = cfg.project.id
+    record = registry.get_project(project_id)
+    last_promoted_at = record.last_promoted_at if record else ""
+
+    # Determine promotion mode
+    incremental = not full and bool(last_promoted_at)
+
+    console.print("[bold]cartographer promote[/bold]")
+    console.print(f"  project:  {project_id}")
+    console.print(f"  mode:     {'full' if full or not last_promoted_at else 'incremental'}")
+    if incremental:
+        console.print(f"  since:    {last_promoted_at}")
 
     # Read all local VDB chunks
-    console.print("[bold]cartographer promote[/bold]")
-    console.print(f"  project: {project_id}")
-
     try:
         import lancedb
         db = lancedb.connect(str(vdb_path))
@@ -108,12 +121,28 @@ def run(
         console.print(f"[red]failed to read local KG: {exc}[/red]")
         raise typer.Exit(code=1)
 
-    console.print(f"  chunks to promote: {len(all_chunks)}")
-    console.print(f"  nodes to promote:  {len(all_nodes)}")
-    console.print(f"  edges to promote:  {len(all_edges)}")
+    # Apply incremental filter: only artifacts changed since last_promoted_at
+    if incremental:
+        cutoff = datetime.datetime.fromisoformat(last_promoted_at)
+        all_chunks = [
+            c for c in all_chunks
+            if datetime.datetime.fromisoformat(c.updated_at) > cutoff
+        ]
+        changed_paths = {c.path for c in all_chunks}
+        all_nodes = [n for n in all_nodes if n.path in changed_paths]
+        changed_node_ids = {n.id for n in all_nodes}
+        all_edges = [e for e in all_edges if e.src in changed_node_ids]
+
+    console.print(f"  chunks:   {len(all_chunks)}")
+    console.print(f"  nodes:    {len(all_nodes)}")
+    console.print(f"  edges:    {len(all_edges)}")
 
     if dry_run:
         console.print("[yellow]--dry-run: no changes written[/yellow]")
+        raise typer.Exit(code=0)
+
+    if not all_chunks and not all_nodes:
+        console.print("nothing to promote (index is up to date)")
         raise typer.Exit(code=0)
 
     # Promote VDB chunks in batches
@@ -132,24 +161,25 @@ def run(
         console=console,
         transient=True,
     ) as progress:
-        vdb_task = progress.add_task("promoting chunks", total=len(all_chunks))
-        for batch in batches:
-            central_vdb.upsert(project_id, batch, embedding_dim)
-            progress.advance(vdb_task, len(batch))
+        if all_chunks:
+            vdb_task = progress.add_task("promoting chunks", total=len(all_chunks))
+            for batch in batches:
+                central_vdb.upsert(project_id, batch, embedding_dim)
+                progress.advance(vdb_task, len(batch))
 
-        kg_task = progress.add_task("promoting nodes", total=len(all_nodes))
-        central_kg.upsert_nodes(all_nodes)
-        progress.advance(kg_task, len(all_nodes))
+        if all_nodes:
+            kg_task = progress.add_task("promoting nodes", total=len(all_nodes))
+            central_kg.upsert_nodes(all_nodes)
+            progress.advance(kg_task, len(all_nodes))
 
-        edge_task = progress.add_task("promoting edges", total=len(all_edges))
-        central_kg.upsert_edges(all_edges)
-        progress.advance(edge_task, len(all_edges))
+        if all_edges:
+            edge_task = progress.add_task("promoting edges", total=len(all_edges))
+            central_kg.upsert_edges(all_edges)
+            progress.advance(edge_task, len(all_edges))
 
-    # Update registry
-    record = registry.get_project(project_id)
+    # Update last_promoted_at in the registry
     if record:
-        import datetime
-        record.last_indexed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record.last_promoted_at = _now()
         registry.upsert_project(record)
 
     console.print(f"  promoted: {len(all_chunks)} chunks, {len(all_nodes)} nodes, {len(all_edges)} edges")

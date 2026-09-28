@@ -123,16 +123,21 @@ def query(db_path: Path, cypher: str, params: dict | None = None) -> list[dict]:
 
 def neighbors(db_path: Path, node_id: str, depth: int = 1, scope: str | None = None) -> list[dict]:
     depth = max(1, min(depth, 6))
-    scope_filter = "WHERE r.scope = $scope" if scope else ""
+    # r is a RECURSIVE_REL for variable-length patterns; scope lives on each hop,
+    # so filter via rels(r), not r directly (r.scope is not a valid accessor).
+    # Kuzu's binder can't resolve a $param inside this ALL(...) predicate (KU_UNREACHABLE
+    # assertion), so the scope value is validated and inlined as a literal instead.
+    scope_filter = ""
+    if scope:
+        if scope not in ("local", "global"):
+            raise ValueError(f"invalid scope: {scope!r}")
+        scope_filter = f"WHERE ALL(rel IN rels(r) WHERE rel.scope = '{scope}')"
     cypher = (
         f"MATCH (a:Artifact {{id: $id}})-[r:RelatesTo* 1..{depth}]-(n:Artifact) "
         f"{scope_filter} "
         "RETURN DISTINCT n.id AS id, n.type AS type, n.path AS path, n.scope AS scope"
     )
-    params = {"id": node_id}
-    if scope:
-        params["scope"] = scope
-    return query(db_path, cypher, params)
+    return query(db_path, cypher, {"id": node_id})
 
 
 def is_readable(db_path: Path) -> bool:

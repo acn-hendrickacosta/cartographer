@@ -49,15 +49,27 @@ def _mcp_servers(workspace: Path) -> dict:
 def run(
     path: Path = typer.Option(Path("."), "--path", help="Workspace root to initialize"),
     stacks: str = typer.Option("", "--stacks", help="Comma-separated stack packs, e.g. python,react"),
-    topology: str = typer.Option("local", "--topology", help="local or central"),
+    topology: str = typer.Option("", "--topology", help="local or central (default: preserve existing, or 'local' for new projects)"),
     name: str = typer.Option("", "--name", help="Project name; defaults to the workspace directory name"),
 ) -> None:
-    if topology not in ("local", "central"):
-        raise typer.BadParameter("topology must be 'local' or 'central'")
-
     workspace = path.resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     project_name = name or workspace.name
+
+    # Resolve topology: explicit flag wins; otherwise preserve what's already in cartographer.toml;
+    # fall back to "local" for brand-new projects.
+    if not topology:
+        if config_mod.config_exists(workspace):
+            try:
+                existing_cfg = config_mod.load_config(workspace)
+                topology = existing_cfg.topology.mode
+            except Exception:
+                topology = "local"
+        else:
+            topology = "local"
+
+    if topology not in ("local", "central"):
+        raise typer.BadParameter("topology must be 'local' or 'central'")
 
     console.print(f"[bold]cartographer init[/bold] at {workspace}")
 
@@ -96,13 +108,34 @@ def run(
     config_mod.save_config(workspace, cfg)
     console.print(f"  {config_mod.CONFIG_FILENAME} written")
 
-    if not config_mod.local_config_path(workspace).exists():
-        import secrets
-        promotion_token = secrets.token_hex(32) if topology == "central" else ""
-        config_mod.save_local_override(workspace, config_mod.LocalOverrideConfig(promotion_token=promotion_token))
-        console.print(f"  {config_mod.LOCAL_CONFIG_FILENAME} written")
-        if topology == "central":
-            console.print(f"  [yellow]promotion_token generated — keep it secret; set [central_vdb] and [central_kg] passwords before promoting[/yellow]")
+    # Always ensure the local override file exists and has a promotion token when
+    # topology is central — even if the file already exists (re-running init).
+    import secrets
+    override = config_mod.load_local_override(workspace)
+    local_cfg_existed = config_mod.local_config_path(workspace).exists()
+    changed = False
+    if topology == "central" and not override.promotion_token:
+        override.promotion_token = secrets.token_hex(32)
+        changed = True
+    if not local_cfg_existed or changed:
+        config_mod.save_local_override(workspace, override)
+        action = "written" if not local_cfg_existed else "updated (promotion_token added)"
+        console.print(f"  {config_mod.LOCAL_CONFIG_FILENAME} {action}")
+    else:
+        console.print(f"  {config_mod.LOCAL_CONFIG_FILENAME} already up to date")
+
+    if topology == "central":
+        console.print(f"  [yellow]central topology: fill in [central_vdb] and [central_kg] credentials in {config_mod.LOCAL_CONFIG_FILENAME}[/yellow]")
+        try:
+            import psycopg2  # noqa: F401
+            import neo4j  # noqa: F401
+        except ImportError:
+            console.print(
+                "  [red]central deps not installed — run:[/red]\n"
+                "  uv pip install \"psycopg2-binary>=2.9\" \"neo4j>=5.0\" \\\n"
+                "    --python \"$(pipx environment --value PIPX_LOCAL_VENVS)/cartographer/bin/python3\" -q\n"
+                "  or: pip install 'cartographer[central]'"
+            )
 
     _ensure_gitignore(workspace)
 

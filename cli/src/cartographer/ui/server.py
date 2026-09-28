@@ -1,8 +1,9 @@
 """FastAPI application for `cartographer ui`.
 
-Four JSON API routes back the single-page HTML UI:
+JSON API routes back the single-page HTML UI:
   GET /api/search?q=<text>&k=<int>     — VDB semantic search
   GET /api/graph?node_id=<id>&depth=<n> — KG neighbors
+  GET /api/files                        — whole-file nodes, for the tree browser
   GET /api/registry                     — all registered projects
   GET /api/stats                        — VDB and KG counts
 """
@@ -72,6 +73,24 @@ def build_app(workspace: Path) -> FastAPI:
         )
         return JSONResponse({"nodes": all_nodes, "edges": edges})
 
+    @app.get("/api/files")
+    def files():
+        rows = kg_driver.query(
+            kg_path,
+            "MATCH (a:Artifact) WHERE a.type IN ['module', 'doc', 'spec'] "
+            "RETURN a.id AS id, a.path AS path, a.type AS type ORDER BY a.path",
+        )
+        return JSONResponse({"files": rows})
+
+    @app.get("/api/project")
+    def project_info():
+        return JSONResponse({
+            "id": project_id,
+            "name": cfg.project.name,
+            "topology": cfg.topology.mode,
+            "workspace": str(workspace),
+        })
+
     @app.get("/api/registry")
     def registry_view():
         projects = registry.list_projects()
@@ -83,12 +102,7 @@ def build_app(workspace: Path) -> FastAPI:
         kg_counts: dict = {}
 
         if vdb_path.exists():
-            rows = vdb_driver.query(
-                vdb_path, scope="local",
-                embedding=[0.0] * vdb_driver.DEFAULT_EMBEDDING_DIM,
-                k=0,
-                where="id IS NOT NULL",
-            )
+            rows = vdb_driver.scan(vdb_path, scope="local", columns=["artifact_type"])
             for r in rows:
                 atype = r.get("artifact_type", "unknown")
                 vdb_counts[atype] = vdb_counts.get(atype, 0) + 1

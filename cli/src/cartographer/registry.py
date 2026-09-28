@@ -23,6 +23,7 @@ class ProjectRecord(BaseModel):
     tenant: str
     created_at: str
     last_indexed_at: str
+    last_promoted_at: str = ""
     location: str
 
 
@@ -68,11 +69,23 @@ def register_project(
         tenant=tenant,
         created_at=existing.created_at if existing else _now(),
         last_indexed_at=_now(),
+        last_promoted_at=existing.last_promoted_at if existing else "",
         location=str(location.resolve()),
     )
     records[project_id] = record
     save_registry(records)
     return record
+
+
+def upsert_project(record: ProjectRecord) -> None:
+    """Save an already-constructed ProjectRecord, overwriting the existing entry.
+
+    Use this instead of register_project when you need to update fields like
+    last_promoted_at without changing last_indexed_at or other metadata.
+    """
+    records = load_registry()
+    records[record.project_id] = record
+    save_registry(records)
 
 
 def get_project(project_id: str) -> ProjectRecord | None:
