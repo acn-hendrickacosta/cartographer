@@ -153,7 +153,13 @@ def collect_paths(root: Path, recursive: bool = True) -> list[Path]:
 
     Skips hidden directories and common ignore patterns (.git, __pycache__, node_modules, .venv).
     """
-    ignored_dirs = {".git", "__pycache__", "node_modules", ".venv", ".env", ".tox", "dist", "build"}
+    ignored_dirs = {
+        ".git", "__pycache__", "node_modules", ".venv", ".env", ".tox",
+        "dist", "build", "coverage", ".cartographer",
+        # JS/TS framework caches
+        ".angular", ".next", ".nuxt", ".svelte-kit", ".cache", ".parcel-cache",
+        ".turbo", ".nx", "out", ".output",
+    }
     paths: list[Path] = []
 
     if root.is_file():
@@ -163,7 +169,11 @@ def collect_paths(root: Path, recursive: bool = True) -> list[Path]:
     for p in glob:
         if not p.is_file():
             continue
+        # Skip named artifact directories
         if any(part in ignored_dirs for part in p.parts):
+            continue
+        # Skip files inside hidden directories (e.g. .angular/cache/)
+        if any(part.startswith(".") for part in p.parts[:-1]):
             continue
         if p.name.startswith("."):
             continue

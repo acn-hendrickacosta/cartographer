@@ -37,12 +37,12 @@ This CLI provisions and queries **local** state only. It does not implement:
 
 - Central/global backends (Qdrant, Neo4j, etc.) -- Phase 2, per `PROJECT_BRIEF.md`
   Section 11. `promote` and `doctor` say so explicitly rather than faking success.
-- The plugin's hooks (ingestion, preload, retrieval) or MCP servers -- those live in
-  a separate `cartographer-plugin` package. `init` leaves `.claude/settings.json` and
-  `.mcp.json` untouched beyond backing them up, because there is nothing real to add
-  to them yet.
-- Archaeology / spec ingestion -- that's the plugin's `archaeology` skill, not a CLI
-  concern.
+- Hooks (ingestion, preload, retrieval) and MCP servers -- the runtime bundle
+  (`cli/src/cartographer/runtime/`) ships the scripts, but the hook and MCP logic
+  they invoke is stubbed (Phase 1). `init` writes the config entries; they do nothing
+  useful yet.
+- Archaeology / spec ingestion -- that is the bundled `archaeology` skill, which
+  `init` copies to `.claude/skills/`. The skill logic itself is a stub for Phase 1.
 
 ## Known limitations / open questions inherited from the brief
 

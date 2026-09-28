@@ -9,12 +9,28 @@ from cartographer.commands import hook as hook_cmd
 from cartographer.commands import stack as stack_cmd
 from cartographer.commands import ui_cmd
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+        typer.echo(f"cartographer {version('cartographer')}")
+        raise typer.Exit()
+
+
 app = typer.Typer(
     name="cartographer",
     help="Persistent knowledge layer CLI for Claude Code projects.",
     no_args_is_help=True,
     add_completion=False,
 )
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(  # noqa: ARG001
+        False, "--version", callback=_version_callback, is_eager=True, help="Show version."
+    ),
+) -> None:
+    pass
 
 app.command("detect")(detect.run)
 app.command("init")(init.run)

@@ -65,15 +65,27 @@ def run(
 
     console.print(f"  {len(paths)} file(s) found")
 
-    result = ingest_pipeline.ingest_paths(
-        paths,
-        project_id=cfg.project.id,
-        workspace_root=workspace,
-        vdb_path=vdb_path,
-        kg_path=kg_path,
-        scope="local",
-        embedder=embedder,
-    )
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("embedding", total=len(paths))
+        result = ingest_pipeline.ingest_paths(
+            paths,
+            project_id=cfg.project.id,
+            workspace_root=workspace,
+            vdb_path=vdb_path,
+            kg_path=kg_path,
+            scope="local",
+            embedder=embedder,
+            on_file=lambda _p: progress.advance(task),
+        )
 
     console.print(f"  processed: {result.files_processed}")
     if result.files_skipped:

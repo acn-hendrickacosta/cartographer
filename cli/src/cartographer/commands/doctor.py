@@ -53,7 +53,7 @@ def run(
     if mcp_path.exists():
         try:
             data = json.loads(mcp_path.read_text(encoding="utf-8"))
-            mcp_wired = "cartographer" in data.get("mcpServers", {})
+            mcp_wired = any(k.startswith("cartographer") for k in data.get("mcpServers", {}))
         except json.JSONDecodeError:
             pass
 

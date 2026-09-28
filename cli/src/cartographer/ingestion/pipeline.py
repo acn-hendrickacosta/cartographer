@@ -10,6 +10,7 @@ to report what happened.
 from __future__ import annotations
 
 import datetime
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,6 +42,7 @@ def ingest_paths(
     kg_path: Path,
     scope: str = "local",
     embedder: Embedder | None = None,
+    on_file: Callable[[Path], None] | None = None,
 ) -> IngestionResult:
     """Ingest a list of files into the local VDB and KG.
 
@@ -61,23 +63,24 @@ def ingest_paths(
         if extraction.skipped:
             result.files_skipped += 1
             result.skipped_paths.append(f"{path}: {extraction.skip_reason}")
-            continue
-
-        try:
-            _ingest_one(
-                extraction=extraction,
-                project_id=project_id,
-                workspace_root=workspace_root,
-                vdb_path=vdb_path,
-                kg_path=kg_path,
-                scope=scope,
-                embedder=embedder,
-                now=now,
-                result=result,
-            )
-            result.files_processed += 1
-        except Exception as exc:
-            result.errors.append(f"{path}: {exc}")
+        else:
+            try:
+                _ingest_one(
+                    extraction=extraction,
+                    project_id=project_id,
+                    workspace_root=workspace_root,
+                    vdb_path=vdb_path,
+                    kg_path=kg_path,
+                    scope=scope,
+                    embedder=embedder,
+                    now=now,
+                    result=result,
+                )
+                result.files_processed += 1
+            except Exception as exc:
+                result.errors.append(f"{path}: {exc}")
+        if on_file is not None:
+            on_file(path)
 
     return result
 

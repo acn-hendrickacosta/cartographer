@@ -14,6 +14,7 @@ Requires the MCP Python SDK: pip install mcp
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 try:
