@@ -1,220 +1,164 @@
 #!/usr/bin/env python3
 """Cartographer KG MCP server.
 
-Exposes eight tools over the MCP stdio protocol:
-  - kg_ensure_namespace
-  - kg_upsert_nodes
-  - kg_upsert_edges
-  - kg_query
-  - kg_neighbors
-  - kg_delete_nodes
-  - kg_delete_edges
-  - kg_namespace_stats
+Runs in two modes:
+  stdio (default) — spawned per-session, workspace from CARTO_WORKSPACE env.
+  http  (--http)  — long-running localhost server. Workspace resolved from:
+                    1. workspace tool argument (Claude passes this from CLAUDE.md)
+                    2. ?workspace= query parameter (per-project .mcp.json URL)
+                    3. CARTO_WORKSPACE env var
 
-Requires the MCP Python SDK: pip install mcp
+Tools:
+  - kg_query     : execute a read-only Cypher query
+  - kg_neighbors : get neighboring nodes of an artifact
+  - kg_stats     : node and edge counts
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from contextvars import ContextVar
 from pathlib import Path
 
 try:
-    from mcp.server import Server
-    from mcp.server.stdio import stdio_server
-    from mcp.types import TextContent, Tool
+    try:
+        from mcp.server.fastmcp import FastMCP as MCPServer
+    except ImportError:
+        from mcp.server.mcpserver import MCPServer
 except ImportError as exc:
     sys.stderr.write(f"mcp SDK not installed: {exc}\n")
     sys.exit(1)
 
-from cartographer import config as config_mod
-from cartographer.indexing import kg as kg_driver
-from cartographer.indexing.kg import Edge, Node
+# Set by HTTP middleware when ?workspace= is in the URL. Empty string = not set.
+_url_workspace: ContextVar[str] = ContextVar("url_workspace", default="")
 
-workspace = Path(os.environ.get("CARTO_WORKSPACE", ".")).resolve()
-local_dir = workspace / ".cartographer" / "local"
-kg_path = local_dir / "kg.kuzu"
+_ENV_WORKSPACE = Path(os.environ.get("CARTO_WORKSPACE", ".")).resolve()
 
-server = Server("cartographer-kg")
+mcp = MCPServer("cartographer-kg")
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="kg_ensure_namespace",
-            description="Create Artifact and RelatesTo tables if absent. Idempotent.",
-            inputSchema={"type": "object", "properties": {}, "required": []},
-        ),
-        Tool(
-            name="kg_upsert_nodes",
-            description="Upsert artifact nodes. Keyed on node id.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "nodes": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "required": ["id", "project_id", "scope", "type", "path"],
-                        },
-                    }
-                },
-                "required": ["nodes"],
-            },
-        ),
-        Tool(
-            name="kg_upsert_edges",
-            description="Upsert relationship edges. Dangling edges (missing src/dst) are silently skipped.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "edges": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "required": ["src", "dst", "type", "scope"],
-                        },
-                    }
-                },
-                "required": ["edges"],
-            },
-        ),
-        Tool(
-            name="kg_query",
-            description="Execute a read-only Cypher query.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "cypher": {"type": "string"},
-                    "params": {"type": "object"},
-                },
-                "required": ["cypher"],
-            },
-        ),
-        Tool(
-            name="kg_neighbors",
-            description="Return neighbors of a node up to depth 4.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "node_id": {"type": "string"},
-                    "depth": {"type": "integer", "default": 1, "minimum": 1, "maximum": 4},
-                    "scope": {"type": "string"},
-                },
-                "required": ["node_id"],
-            },
-        ),
-        Tool(
-            name="kg_delete_nodes",
-            description="Delete nodes by id list. Cascades to their edges.",
-            inputSchema={
-                "type": "object",
-                "properties": {"ids": {"type": "array", "items": {"type": "string"}}},
-                "required": ["ids"],
-            },
-        ),
-        Tool(
-            name="kg_delete_edges",
-            description="Delete edges by src/dst/type triple.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "src": {"type": "string"},
-                    "dst": {"type": "string"},
-                    "type": {"type": "string"},
-                },
-                "required": ["src", "dst", "type"],
-            },
-        ),
-        Tool(
-            name="kg_namespace_stats",
-            description="Return node and edge counts.",
-            inputSchema={"type": "object", "properties": {}, "required": []},
-        ),
-    ]
+def _resolve_workspace(explicit: str = "") -> Path:
+    """Resolve workspace: explicit arg → URL param → env var."""
+    if explicit:
+        return Path(explicit).resolve()
+    url_ws = _url_workspace.get()
+    if url_ws:
+        return Path(url_ws).resolve()
+    return _ENV_WORKSPACE
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    import json
+@mcp.tool()
+def kg_query(cypher: str, workspace: str = "") -> str:
+    """Execute a read-only Cypher query on the knowledge graph.
 
-    if name == "kg_ensure_namespace":
-        kg_driver.ensure_namespace(kg_path)
-        return [TextContent(type="text", text=json.dumps({"ok": True}))]
+    The graph has Artifact nodes and RelatesTo edges.
+    Artifact properties: id, project_id, scope, type, path, attrs.
+    RelatesTo properties: type (e.g. imports, implements_spec, depends_on), scope, attrs.
 
-    if name == "kg_upsert_nodes":
-        nodes = [Node(**n) for n in arguments["nodes"]]
-        kg_driver.upsert_nodes(kg_path, nodes)
-        return [TextContent(type="text", text=json.dumps({"upserted": len(nodes)}))]
+    Example queries:
+      MATCH (a:Artifact {type: 'spec'}) RETURN a.path LIMIT 10
+      MATCH (a:Artifact)-[r:RelatesTo]->(b:Artifact) WHERE a.path CONTAINS 'logo' RETURN a.path, r.type, b.path LIMIT 20
 
-    if name == "kg_upsert_edges":
-        edges = []
-        for e in arguments["edges"]:
-            try:
-                edges.append(Edge(**e))
-            except Exception:
-                pass  # dangling edge skipped
-        kg_driver.upsert_edges(kg_path, edges)
-        return [TextContent(type="text", text=json.dumps({"upserted": len(edges)}))]
+    Args:
+        cypher: A Cypher query string. Read-only (MATCH/RETURN only).
+        workspace: Absolute path to the project root. Always pass this (see CLAUDE.md).
+    """
+    try:
+        from cartographer.indexing import kg as kg_driver
 
-    if name == "kg_query":
-        rows = kg_driver.query(kg_path, arguments["cypher"], arguments.get("params"))
-        return [TextContent(type="text", text=json.dumps({"results": rows}))]
+        ws = _resolve_workspace(workspace)
+        kg_path = ws / ".cartographer" / "local" / "kg.kuzu"
+        if not kg_path.exists():
+            return json.dumps({"error": f"Local KG not found at {kg_path}. Run: cartographer seed ."})
+        rows = kg_driver.query(kg_path, cypher)
+        return json.dumps({"results": rows}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
 
-    if name == "kg_neighbors":
+
+@mcp.tool()
+def kg_neighbors(node_id: str, workspace: str = "", depth: int = 1, scope: str = "local") -> str:
+    """Get neighboring artifact nodes connected to the given node.
+
+    Args:
+        node_id: The artifact node id (usually the file path).
+        workspace: Absolute path to the project root. Always pass this (see CLAUDE.md).
+        depth: Traversal depth 1-4 (default 1).
+        scope: Filter by scope — "local" or "global".
+    """
+    try:
+        from cartographer.indexing import kg as kg_driver
+
+        ws = _resolve_workspace(workspace)
+        kg_path = ws / ".cartographer" / "local" / "kg.kuzu"
+        if not kg_path.exists():
+            return json.dumps({"error": f"Local KG not found at {kg_path}. Run: cartographer seed ."})
         rows = kg_driver.neighbors(
             kg_path,
-            node_id=arguments["node_id"],
-            depth=min(int(arguments.get("depth", 1)), 4),
-            scope=arguments.get("scope"),
+            node_id=node_id,
+            depth=min(int(depth), 4),
+            scope=scope,
         )
-        return [TextContent(type="text", text=json.dumps({"nodes": rows}))]
+        return json.dumps({"node_id": node_id, "neighbors": rows}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
 
-    if name == "kg_delete_nodes":
-        conn = kg_driver._connect(kg_path)
-        for nid in arguments["ids"]:
+
+@mcp.tool()
+def kg_stats(workspace: str = "") -> str:
+    """Return node and edge counts in the local knowledge graph.
+
+    Args:
+        workspace: Absolute path to the project root. Always pass this (see CLAUDE.md).
+    """
+    try:
+        from cartographer.indexing import kg as kg_driver
+
+        ws = _resolve_workspace(workspace)
+        kg_path = ws / ".cartographer" / "local" / "kg.kuzu"
+        if not kg_path.exists():
+            return json.dumps({"error": f"Local KG not found at {kg_path}. Run: cartographer seed ."})
+        node_count = kg_driver.query(kg_path, "MATCH (a:Artifact) RETURN count(*) AS cnt")
+        edge_count = kg_driver.query(kg_path, "MATCH ()-[r:RelatesTo]->() RETURN count(*) AS cnt")
+        return json.dumps({
+            "workspace": str(ws),
+            "nodes": node_count[0]["cnt"] if node_count else 0,
+            "edges": edge_count[0]["cnt"] if edge_count else 0,
+        })
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+def _run_http(port: int) -> None:
+    """Run as a persistent HTTP server with per-request workspace routing."""
+    import uvicorn
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    class WorkspaceMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            ws = request.query_params.get("workspace", "")
+            token = _url_workspace.set(ws)
             try:
-                conn.execute("MATCH (a:Artifact {id: $id}) DELETE a", {"id": nid})
-            except Exception:
-                pass
-        return [TextContent(type="text", text=json.dumps({"ok": True}))]
+                return await call_next(request)
+            finally:
+                _url_workspace.reset(token)
 
-    if name == "kg_delete_edges":
-        conn = kg_driver._connect(kg_path)
-        try:
-            conn.execute(
-                "MATCH (s:Artifact {id: $src})-[r:RelatesTo {type: $type}]->(d:Artifact {id: $dst}) DELETE r",
-                {"src": arguments["src"], "dst": arguments["dst"], "type": arguments["type"]},
-            )
-        except Exception:
-            pass
-        return [TextContent(type="text", text=json.dumps({"ok": True}))]
-
-    if name == "kg_namespace_stats":
-        try:
-            node_count = kg_driver.query(kg_path, "MATCH (a:Artifact) RETURN count(*) AS cnt")
-            edge_count = kg_driver.query(kg_path, "MATCH ()-[r:RelatesTo]->() RETURN count(*) AS cnt")
-            return [TextContent(type="text", text=json.dumps({
-                "nodes": node_count[0]["cnt"] if node_count else 0,
-                "edges": edge_count[0]["cnt"] if edge_count else 0,
-            }))]
-        except Exception:
-            return [TextContent(type="text", text=json.dumps({"nodes": 0, "edges": 0}))]
-
-    return [TextContent(type="text", text=json.dumps({"error": f"unknown tool: {name}"}))]
+    app = mcp.streamable_http_app()
+    app.add_middleware(WorkspaceMiddleware)
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
-async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
-
-
-def main_sync():
-    """Synchronous entry point for the pyproject.toml `cartographer-kg-server` script."""
-    import asyncio
-    asyncio.run(main())
+def main_sync() -> None:
+    args = sys.argv[1:]
+    if "--http" in args:
+        port = 4011
+        if "--port" in args:
+            port = int(args[args.index("--port") + 1])
+        _run_http(port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

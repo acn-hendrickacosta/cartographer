@@ -79,17 +79,18 @@ active = ["python"]
 
 ```toml
 [vdb]
-# VDB backend driver.
-# "lancedb"     -- local embedded, on-disk. Default. No service required.
-# "qdrant"      -- Qdrant server (local or remote).
-# "pgvector"    -- PostgreSQL with pgvector extension.
-# "opensearch"  -- Amazon OpenSearch or OpenSearch-compatible server.
-# "weaviate"    -- Weaviate server.
-driver = "lancedb"
+# Central VDB backend driver. Only applies when topology.mode = "central".
+# The local index always uses LanceDB embedded -- no config required, no service needed.
+#
+# "pgvector"  -- PostgreSQL with pgvector extension. Default for central. Cloud-agnostic.
+# "qdrant"    -- Qdrant server (local or remote).
+# "opensearch" -- Amazon OpenSearch or compatible server.
+# "weaviate"  -- Weaviate server.
+central_driver = "pgvector"
 
-# Path to the local LanceDB data directory, relative to the project root.
-# Only applies when driver = "lancedb".
-local_path = ".cartographer/vdb"
+# Name of the PostgreSQL database cartographer uses for pgvector.
+# Only applies when central_driver = "pgvector".
+database = "cartographer"
 
 # Collection name prefix. Collections are named <prefix>_<project_id>_<scope>.
 collection_prefix = "carto"
@@ -99,16 +100,12 @@ collection_prefix = "carto"
 
 ```toml
 [kg]
-# KG backend driver.
-# "kuzu"      -- local embedded, on-disk. Default. No service required.
-# "neo4j"     -- Neo4j server (local or remote).
-# "neptune"   -- Amazon Neptune or Neptune-compatible server.
-# "arangodb"  -- ArangoDB server.
-driver = "kuzu"
-
-# Path to the local Kuzu data directory, relative to the project root.
-# Only applies when driver = "kuzu".
-local_path = ".cartographer/kg"
+# Central KG backend driver. Only applies when topology.mode = "central".
+# The local index always uses Kuzu embedded -- no config required, no service needed.
+#
+# "neo4j"    -- Neo4j server (local or remote). Default for central. Cloud-agnostic.
+# "arangodb" -- ArangoDB server.
+central_driver = "neo4j"
 
 # Namespace prefix. Namespaces are named <prefix>_<project_id>_<scope>.
 namespace_prefix = "carto"
@@ -205,26 +202,27 @@ This file is gitignored. It holds per-developer secrets and path overrides. Gene
 
 ### [vdb] (central override)
 
+These values are provided by the admin who provisioned the central backend. Required when `topology.mode = "central"`.
+
 ```toml
 [vdb]
-# Central VDB endpoint. Required when topology.mode = "central".
-endpoint = "https://vdb.example.com"
-
-# API key for the central VDB backend.
-# Prefer setting CARTO_VDB_API_KEY in the environment instead of storing here.
-api_key = "vdb-key-goes-here"
+# PostgreSQL connection details for the central pgvector backend.
+# Prefer CARTO_VDB_* environment variables in CI.
+host = "db.example.com"       # or "localhost" for local dev
+port = 5432
+user = "cartographer"
+password = "secret"           # or use CARTO_VDB_PASSWORD
 ```
 
 ### [kg] (central override)
 
 ```toml
 [kg]
-# Central KG endpoint. Required when topology.mode = "central".
-endpoint = "https://kg.example.com"
-
-# API key for the central KG backend.
-# Prefer setting CARTO_KG_API_KEY in the environment instead of storing here.
-api_key = "kg-key-goes-here"
+# Neo4j connection details for the central KG backend.
+# Prefer CARTO_KG_* environment variables in CI.
+uri = "bolt://neo4j.example.com:7687"   # or "bolt://localhost:7687" for local dev
+user = "neo4j"
+password = "secret"                      # or use CARTO_KG_PASSWORD
 ```
 
 ### [embedder] (api override)
@@ -256,12 +254,15 @@ Every config value can be overridden by a `CARTO_` environment variable. Variabl
 | `CARTO_PROJECT_TENANT` | `project.tenant` | |
 | `CARTO_TOPOLOGY_MODE` | `topology.mode` | |
 | `CARTO_TOPOLOGY_PROMOTION_TRIGGER` | `topology.promotion_trigger` | |
-| `CARTO_VDB_DRIVER` | `vdb.driver` | |
-| `CARTO_VDB_ENDPOINT` | `vdb.endpoint` (local override) | Set in CI |
-| `CARTO_VDB_API_KEY` | `vdb.api_key` (local override) | Set in CI |
-| `CARTO_KG_DRIVER` | `kg.driver` | |
-| `CARTO_KG_ENDPOINT` | `kg.endpoint` (local override) | Set in CI |
-| `CARTO_KG_API_KEY` | `kg.api_key` (local override) | Set in CI |
+| `CARTO_VDB_CENTRAL_DRIVER` | `vdb.central_driver` | Central VDB driver (pgvector, qdrant) |
+| `CARTO_VDB_HOST` | `vdb.host` (local override) | pgvector host |
+| `CARTO_VDB_PORT` | `vdb.port` (local override) | pgvector port |
+| `CARTO_VDB_USER` | `vdb.user` (local override) | pgvector user |
+| `CARTO_VDB_PASSWORD` | `vdb.password` (local override) | Set in CI |
+| `CARTO_KG_CENTRAL_DRIVER` | `kg.central_driver` | Central KG driver (neo4j, arangodb) |
+| `CARTO_KG_URI` | `kg.uri` (local override) | Neo4j Bolt URI |
+| `CARTO_KG_USER` | `kg.user` (local override) | Neo4j user |
+| `CARTO_KG_PASSWORD` | `kg.password` (local override) | Set in CI |
 | `CARTO_EMBEDDER_DRIVER` | `embedder.driver` | |
 | `CARTO_EMBEDDER_API_URL` | `embedder.api_url` (local override) | |
 | `CARTO_EMBEDDER_API_KEY` | `embedder.api_key` (local override) | |

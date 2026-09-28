@@ -24,6 +24,7 @@ def run(
     source: Path = typer.Argument(..., help="File or directory to ingest"),
     path: Path = typer.Option(Path("."), "--path", help="Workspace root (where cartographer.toml lives)"),
     recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Recurse into subdirectories"),
+    enrich: bool = typer.Option(False, "--enrich/--no-enrich", help="Use Claude to extract semantic KG relationships (slower, requires claude CLI)."),
 ) -> None:
     workspace = path.resolve()
     if not config_mod.config_exists(workspace):
@@ -46,6 +47,14 @@ def run(
     kg_path = local_dir / "kg.kuzu"
 
     console.print(f"[bold]cartographer seed[/bold] {source}")
+
+    if enrich:
+        from cartographer.ingestion.kg_enricher import is_available as claude_available
+        if not claude_available():
+            console.print("[red]--enrich requires the `claude` CLI on PATH; not found[/red]")
+            raise typer.Exit(code=1)
+        console.print("[yellow]--enrich enabled: Claude will analyse each file for semantic relationships.[/yellow]")
+        console.print("[yellow]Expect ~30-60s per file. Run on a subset first if testing.[/yellow]")
 
     try:
         from cartographer.ingestion.embedder import get_embedder
@@ -85,6 +94,7 @@ def run(
             scope="local",
             embedder=embedder,
             on_file=lambda _p: progress.advance(task),
+            enrich=enrich,
         )
 
     console.print(f"  processed: {result.files_processed}")

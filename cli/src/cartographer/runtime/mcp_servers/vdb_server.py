@@ -1,166 +1,172 @@
 #!/usr/bin/env python3
 """Cartographer VDB MCP server.
 
-Exposes five tools over the MCP stdio protocol:
-  - vdb_ensure_collection
-  - vdb_upsert
-  - vdb_query
-  - vdb_delete
-  - vdb_collection_stats
+Runs in two modes:
+  stdio (default) — spawned per-session, workspace from CARTO_WORKSPACE env.
+  http  (--http)  — long-running localhost server. Workspace resolved from:
+                    1. workspace tool argument (Claude passes this from CLAUDE.md)
+                    2. ?workspace= query parameter (per-project .mcp.json URL)
+                    3. CARTO_WORKSPACE env var
 
-Requires the MCP Python SDK: pip install mcp
+Tools:
+  - vdb_search : semantic search by text query (embeds internally)
+  - vdb_stats  : chunk counts per artifact type
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from contextvars import ContextVar
 from pathlib import Path
 
 try:
-    from mcp.server import Server
-    from mcp.server.stdio import stdio_server
-    from mcp.types import TextContent, Tool
+    try:
+        from mcp.server.fastmcp import FastMCP as MCPServer
+    except ImportError:
+        from mcp.server.mcpserver import MCPServer
 except ImportError as exc:
     sys.stderr.write(f"mcp SDK not installed: {exc}\n")
     sys.exit(1)
 
-from cartographer import config as config_mod
-from cartographer.indexing import vdb as vdb_driver
+# Set by HTTP middleware when ?workspace= is in the URL. Empty string = not set.
+_url_workspace: ContextVar[str] = ContextVar("url_workspace", default="")
 
-workspace = Path(os.environ.get("CARTO_WORKSPACE", ".")).resolve()
-cfg = config_mod.load_config(workspace) if config_mod.config_exists(workspace) else None
-local_dir = workspace / ".cartographer" / "local"
-vdb_path = local_dir / "vdb.lance"
+_ENV_WORKSPACE = Path(os.environ.get("CARTO_WORKSPACE", ".")).resolve()
 
-server = Server("cartographer-vdb")
+mcp = MCPServer("cartographer-vdb")
 
-
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="vdb_ensure_collection",
-            description="Ensure the VDB collection exists for the given scope. Idempotent.",
-            inputSchema={
-                "type": "object",
-                "properties": {"scope": {"type": "string", "enum": ["local", "global"]}},
-                "required": ["scope"],
-            },
-        ),
-        Tool(
-            name="vdb_upsert",
-            description="Upsert up to 500 pre-embedded chunks. Keyed on chunk id.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "scope": {"type": "string", "enum": ["local", "global"]},
-                    "chunks": {
-                        "type": "array",
-                        "maxItems": 500,
-                        "items": {
-                            "type": "object",
-                            "required": ["id", "project_id", "scope", "artifact_type", "path", "text", "embedding", "updated_at"],
-                        },
-                    },
-                },
-                "required": ["scope", "chunks"],
-            },
-        ),
-        Tool(
-            name="vdb_query",
-            description="Semantic search. Returns up to k=50 scored chunks.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "scope": {"type": "string", "enum": ["local", "global"]},
-                    "embedding": {"type": "array", "items": {"type": "number"}},
-                    "k": {"type": "integer", "default": 8, "maximum": 50},
-                    "where": {"type": "string", "description": "Optional SQL filter"},
-                },
-                "required": ["scope", "embedding"],
-            },
-        ),
-        Tool(
-            name="vdb_delete",
-            description="Delete chunks by id list.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "scope": {"type": "string", "enum": ["local", "global"]},
-                    "ids": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["scope", "ids"],
-            },
-        ),
-        Tool(
-            name="vdb_collection_stats",
-            description="Return chunk counts per artifact_type for the given scope.",
-            inputSchema={
-                "type": "object",
-                "properties": {"scope": {"type": "string", "enum": ["local", "global"]}},
-                "required": ["scope"],
-            },
-        ),
-    ]
+# Warm up the embedder at startup so the model is loaded before any tool call.
+_embedder = None
+try:
+    from fastembed import TextEmbedding
+    _embedder = TextEmbedding()
+except Exception:
+    pass
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    import json
+def _resolve_workspace(explicit: str = "") -> Path:
+    """Resolve workspace: explicit arg → URL param → env var."""
+    if explicit:
+        return Path(explicit).resolve()
+    url_ws = _url_workspace.get()
+    if url_ws:
+        return Path(url_ws).resolve()
+    return _ENV_WORKSPACE
 
-    if name == "vdb_ensure_collection":
-        scope = arguments["scope"]
-        vdb_driver.ensure_collection(vdb_path, scope=scope)
-        return [TextContent(type="text", text=json.dumps({"ok": True, "scope": scope}))]
 
-    if name == "vdb_upsert":
-        scope = arguments["scope"]
-        from cartographer.indexing.vdb import ChunkRecord
-        chunks = [ChunkRecord(**c) for c in arguments["chunks"]]
-        n = vdb_driver.upsert(vdb_path, scope=scope, chunks=chunks)
-        return [TextContent(type="text", text=json.dumps({"upserted": n}))]
+@mcp.tool()
+def vdb_search(query: str, workspace: str = "", k: int = 8, scope: str = "local") -> str:
+    """Semantic search over the Cartographer knowledge index.
 
-    if name == "vdb_query":
-        scope = arguments["scope"]
-        embedding = arguments["embedding"]
-        k = min(int(arguments.get("k", 8)), 50)
-        where = arguments.get("where")
-        hits = vdb_driver.query(vdb_path, scope=scope, embedding=embedding, k=k, where=where)
-        return [TextContent(type="text", text=json.dumps({"results": hits}))]
+    Returns the top-k most relevant indexed chunks (files, specs, docs) for the query.
+    Call this to find context relevant to a concept, module, or task before answering.
 
-    if name == "vdb_delete":
-        scope = arguments["scope"]
-        vdb_driver.delete(vdb_path, scope=scope, ids=arguments["ids"])
-        return [TextContent(type="text", text=json.dumps({"ok": True}))]
+    Args:
+        query: Natural-language search query.
+        workspace: Absolute path to the project root. Always pass this (see CLAUDE.md).
+        k: Number of results to return (max 20).
+        scope: "local" for local index (default).
+    """
+    try:
+        from cartographer.indexing import vdb as vdb_driver
 
-    if name == "vdb_collection_stats":
-        scope = arguments["scope"]
-        from lancedb import connect
+        ws = _resolve_workspace(workspace)
+        vdb_path = ws / ".cartographer" / "local" / "vdb.lance"
+        if not vdb_path.exists():
+            return json.dumps({"error": f"Local index not found at {vdb_path}. Run: cartographer seed ."})
+
+        embedder = _embedder
+        if embedder is None:
+            from fastembed import TextEmbedding
+            embedder = TextEmbedding()
+        embedding = list(next(embedder.embed([query[:512]])))
+        k = min(int(k), 20)
+        hits = vdb_driver.query(vdb_path, scope=scope, embedding=embedding, k=k)
+
+        results = [
+            {
+                "path": h.get("path", ""),
+                "artifact_type": h.get("artifact_type", ""),
+                "text": h.get("text", "")[:800],
+                "score": h.get("_distance", None),
+            }
+            for h in hits
+        ]
+        return json.dumps({"query": query, "workspace": str(ws), "results": results}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def vdb_stats(workspace: str = "") -> str:
+    """Return chunk counts per artifact type in the local index.
+
+    Use this to understand what is indexed (files, specs, docs) and how many chunks exist.
+
+    Args:
+        workspace: Absolute path to the project root. Always pass this (see CLAUDE.md).
+    """
+    try:
+        import lancedb
+
+        ws = _resolve_workspace(workspace)
+        vdb_path = ws / ".cartographer" / "local" / "vdb.lance"
+        if not vdb_path.exists():
+            return json.dumps({"error": f"Local index not found at {vdb_path}. Run: cartographer seed ."})
+
+        import pyarrow.compute as pc
+
+        db = lancedb.connect(str(vdb_path))
+        tables = db.list_tables()
+        if hasattr(tables, "tables"):
+            tables = tables.tables
         counts: dict[str, int] = {}
-        try:
-            db = connect(str(vdb_path))
-            if scope in db.list_tables().tables:
-                tbl = db.open_table(scope)
-                for row in tbl.to_arrow().to_pylist():
-                    atype = row.get("artifact_type", "unknown")
-                    counts[atype] = counts.get(atype, 0) + 1
-        except Exception:
-            pass
-        return [TextContent(type="text", text=json.dumps({"scope": scope, "counts": counts}))]
-
-    return [TextContent(type="text", text=json.dumps({"error": f"unknown tool: {name}"}))]
-
-
-async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+        total = 0
+        for table_name in tables:
+            tbl = db.open_table(table_name)
+            arrow_tbl = tbl.to_arrow(columns=["artifact_type"])
+            col = arrow_tbl.column("artifact_type")
+            for val in col.unique().to_pylist():
+                mask = pc.equal(col, val)
+                n = pc.sum(mask.cast("int64")).as_py()
+                atype = val if val is not None else "unknown"
+                counts[atype] = counts.get(atype, 0) + n
+                total += n
+        return json.dumps({"workspace": str(ws), "total_chunks": total, "by_type": counts})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
 
 
-def main_sync():
-    """Synchronous entry point for the pyproject.toml `cartographer-vdb-server` script."""
-    import asyncio
-    asyncio.run(main())
+def _run_http(port: int) -> None:
+    """Run as a persistent HTTP server with per-request workspace routing."""
+    import uvicorn
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    class WorkspaceMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            ws = request.query_params.get("workspace", "")
+            token = _url_workspace.set(ws)
+            try:
+                return await call_next(request)
+            finally:
+                _url_workspace.reset(token)
+
+    app = mcp.streamable_http_app()
+    app.add_middleware(WorkspaceMiddleware)
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+
+
+def main_sync() -> None:
+    args = sys.argv[1:]
+    if "--http" in args:
+        port = 4010
+        if "--port" in args:
+            port = int(args[args.index("--port") + 1])
+        _run_http(port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

@@ -114,11 +114,13 @@ The KG and VDB are stateful services reached through **MCP servers** bundled in 
 
 Defaults are lightweight and local:
 
-| Store | Local default | Central upgrade path |
+| Store | Local (always embedded, no service required) | Central (admin-provisioned, cloud-agnostic) |
 |---|---|---|
-| VDB | Embedded (LanceDB or Qdrant embedded), on-disk in the workspace | Any backend implementing the VDB driver contract: Qdrant, Milvus, pgvector, OpenSearch, Weaviate |
-| KG | Embedded property graph (Kuzu) or a SQLite-backed triple store | Any backend implementing the KG driver contract: Neo4j, PuppyGraph, Neptune, ArangoDB |
-| Embeddings | Local embedding model (fastembed or sentence-transformers) to avoid data egress | Same, or a configured API embedder if the team accepts egress |
+| VDB | LanceDB embedded, on-disk in `.cartographer/local/`. Ships with the CLI install. Not configurable. | pgvector (primary). Any backend implementing the VDB driver contract: Qdrant, Milvus, OpenSearch, Weaviate. |
+| KG | Kuzu embedded, on-disk in `.cartographer/local/`. Ships with the CLI install. Not configurable. | Neo4j (primary). Any backend implementing the KG driver contract: PuppyGraph, ArangoDB, Neptune. |
+| Embeddings | fastembed local model (BAAI/bge-small-en-v1.5). No egress. Ships with the CLI install. | Same local model by default. API embedder opt-in if the team explicitly accepts egress. |
+
+Developers need zero local infrastructure beyond what ships with the pip install. The central backend is provisioned once by an admin and the connection details are distributed to developers via a shared `.cartographer.local.toml` stub.
 
 Both local and central backends implement the same driver interface. Switching topology is a configuration change, not a code change. The central backend is accessed over HTTPS using an API key configured in the gitignored local override or the environment.
 
@@ -168,7 +170,7 @@ Commands for the first cut:
 | `stack add <name>` | Apply a stack pack (python, react) into the workspace standards. |
 | `promote` | Manual promotion of merged artifacts to the global index. No-op in local-only topology. |
 | `recall` | Convenience wrapper to query the registry, mostly a debugging aid. The real path is the recall skill. |
-| `seed <path>` | Ingest a documentation source (directory, file, or glob) into the local index immediately, outside of the normal hook-triggered ingestion cycle. |
+| `seed <path> [--enrich]` | Ingest a documentation source (directory, file, or glob) into the local index immediately. Without `--enrich`: fast regex-based symbol and import extraction. With `--enrich`: calls the local `claude` CLI to extract semantic KG relationships (implements, depends_on, and typed edges such as validates, renders, persists). Requires `claude` on PATH; falls back gracefully if absent. |
 | `ui` | Launch a lightweight local web server (FastAPI + single-page HTML/JS) that lets a developer browse the local VDB and KG visually: semantic search, graph explorer, registry view, and index stats. |
 | `doctor` | Validate config, backend reachability, and plugin wiring. |
 
@@ -258,8 +260,9 @@ Generate `docs/DATA_MODEL.md`.
 
 ### 7.2 KG (lightweight)
 
-- Node: `id` (artifact identity), `project_id`, `scope`, `type` (module, symbol, spec, doc), `path`, `attrs`.
-- Edge: `src`, `dst`, `type` (defines, references, implements_spec, depends_on), `scope`, `attrs`.
+- Node: `id` (artifact identity), `project_id`, `scope`, `type` (module, symbol, spec, doc, concept), `path`, `attrs`.
+- Edge: `src`, `dst`, `type` (defines, references, implements_spec, depends_on; enriched: validates, renders, persists, orchestrates, produces, consumes, configures, extends), `scope`, `attrs`.
+- `concept` nodes are stub nodes created by Claude-based enrichment to represent semantic targets (components, services, data models) that do not map to a specific file. They allow typed edges to be created even when the target has not yet been indexed as a module node.
 - Keep the schema small on purpose. Resist modeling everything. Add edge types only when a recall query needs them.
 
 ### 7.3 Registry
@@ -333,11 +336,11 @@ The standards distribution track (Section 5.6) is phased independently of the ph
 | Concern | Candidates | Lean |
 |---|---|---|
 | CLI language | Python, Node | Confirm with team. Python fits the data and embedding tooling. |
-| Local VDB | LanceDB, Qdrant embedded | LanceDB for zero-service on-disk simplicity |
-| Local KG | Kuzu embedded, SQLite triples | Kuzu for real graph queries with no service |
-| Embedder | fastembed, sentence-transformers | Local default, API embedder opt-in |
-| Central VDB | Qdrant, Milvus, pgvector | Team choice |
-| Central KG | Neo4j, PuppyGraph | Team choice |
+| Local VDB | LanceDB embedded | Fixed. Ships with the install. No config required. |
+| Local KG | Kuzu embedded | Fixed. Ships with the install. No config required. |
+| Embedder | fastembed (BAAI/bge-small-en-v1.5) | Local default, no egress. API embedder opt-in. |
+| Central VDB | pgvector (primary), Qdrant, Milvus | pgvector confirmed. Cloud-agnostic. Runs on any PostgreSQL. |
+| Central KG | Neo4j (primary), PuppyGraph, ArangoDB | Neo4j confirmed. Cloud-agnostic. Runs locally via Docker. |
 
 Record the confirmed choices as ADRs, see Section 16.
 

@@ -43,6 +43,7 @@ def ingest_paths(
     scope: str = "local",
     embedder: Embedder | None = None,
     on_file: Callable[[Path], None] | None = None,
+    enrich: bool = False,
 ) -> IngestionResult:
     """Ingest a list of files into the local VDB and KG.
 
@@ -75,6 +76,7 @@ def ingest_paths(
                     embedder=embedder,
                     now=now,
                     result=result,
+                    enrich=enrich,
                 )
                 result.files_processed += 1
             except Exception as exc:
@@ -95,6 +97,7 @@ def _ingest_one(
     embedder: Embedder,
     now: str,
     result: IngestionResult,
+    enrich: bool = False,
 ) -> None:
     rel_path = str(extraction.path.relative_to(workspace_root))
     artifact_type = extraction.artifact_type
@@ -134,6 +137,7 @@ def _ingest_one(
     result.chunks_upserted += upserted
 
     # 5. Extract KG graph
+    # LLM enrichment only runs on spec/doc files — code gets structural edges from AST instead.
     graph = graph_extractor.extract(
         path=extraction.path,
         text=text,
@@ -141,6 +145,7 @@ def _ingest_one(
         project_id=project_id,
         scope=scope,
         workspace_root=workspace_root,
+        enrich=enrich and artifact_type != text_extractor.ArtifactType.CODE,
     )
 
     # 6. Upsert KG

@@ -186,11 +186,11 @@ cartographer stack add <name>
 
 ### 4.4 `cartographer seed <path>`
 
-**Purpose:** Ingest a documentation source into the local index immediately, outside the normal hook-triggered ingestion cycle.
+**Purpose:** Ingest a documentation source into the local index immediately, outside the normal hook-triggered ingestion cycle. With `--enrich`, uses the local `claude` CLI to extract richer semantic KG relationships beyond what static analysis provides.
 
 **Usage:**
 ```
-cartographer seed <path> [--recursive] [--yes]
+cartographer seed <path> [--recursive] [--enrich]
 ```
 
 **Inputs:**
@@ -199,24 +199,24 @@ cartographer seed <path> [--recursive] [--yes]
 |---|---|---|
 | `path` | required | File, directory, or glob pattern to ingest |
 | `--recursive` | true for directories | Walk subdirectories when `path` is a directory |
-| `--yes` | false | Skip confirmation when the file count is large (>50 files) |
+| `--enrich` | false | Call the local `claude` CLI per file to extract semantic KG relationships. Requires `claude` on PATH. Adds `concept` nodes and typed edges (validates, renders, persists, etc.) that regex extraction cannot produce. Expect 30-60 seconds per file. |
 
-**Supported formats:** `.md`, `.rst`, `.txt`, `.adoc`, `.docx`, `.pptx`, `.pdf`
+**Supported formats:** `.md`, `.rst`, `.txt`, `.adoc`, `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, and other plain-text code and config extensions.
 
 **Process:**
 1. Load config.
-2. Resolve `path` to a list of files, applying `ingestion.exclude_patterns`.
-3. Filter to supported formats. Warn and skip unsupported extensions.
-4. If file count exceeds 50 and `--yes` is not set: print file list and prompt for confirmation.
-5. For each file:
-   a. **Plain text** (`.md`, `.rst`, `.txt`, `.adoc`): read file content directly.
-   b. **Binary** (`.docx`, `.pptx`, `.pdf`): invoke Claude (local, via MCP tool) to extract structured text. Claude returns section headings, body text, table content, and slide speaker notes for `.pptx`. If Claude is not available (CLI running outside a Claude Code session): skip the file, print a warning, continue.
-   c. Chunk extracted text at heading or section boundaries. Fall back to fixed-size sliding window if no headings are found.
-   d. Embed chunks using configured embedder driver.
-   e. Extract KG nodes (`type: doc`) and edges (`type: documents`) from extracted text.
+2. Resolve `path` to a list of files, skipping hidden directories and common artifact directories (`.git`, `node_modules`, `.angular`, `.next`, etc.).
+3. Filter to supported formats. Skip and warn on unsupported extensions.
+4. If `--enrich` is set: verify `claude` is on PATH. Exit with a clear error if not found.
+5. For each file, show a progress bar (file N of total):
+   a. Read file content as plain text.
+   b. Chunk text at symbol or heading boundaries (fallback: fixed-size sliding window).
+   c. Embed chunks using the local fastembed model.
+   d. Extract KG nodes and edges using regex-based static analysis (imports, symbol definitions, spec references).
+   e. If `--enrich`: call `claude -p` with the file content and a structured extraction prompt. Parse the JSON response. Merge Claude-produced `implements`, `depends_on`, and `relationships` into the KG graph as additional nodes and edges. Concept targets that do not map to a real file are written as `concept` stub nodes so edges can be created immediately.
    f. `vdb_upsert` chunks to local scope.
    g. `kg_upsert_nodes` and `kg_upsert_edges` to local scope.
-6. Print summary: files processed, chunks written, nodes and edges upserted, files skipped.
+6. Print summary: files processed, chunks written, nodes and edges upserted, files skipped, errors.
 
 **Exit codes:** `0` success (even if some files were skipped), `1` config not found, `2` no supported files found at path.
 

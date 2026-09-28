@@ -23,70 +23,27 @@ console = Console()
 
 LOCAL_INDEX_REL = Path(".cartographer") / "local"
 
-# Hook entries written into .claude/settings.json.
-# Uses `cartographer hook <name>` so no absolute path is needed — the cartographer
-# binary is on PATH after pip install.
-_HOOKS_SETTINGS = {
-    "hooks": {
-        "PostToolUse": [
-            {
-                "matcher": "Write|Edit|MultiEdit",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "cartographer hook enqueue",
-                    }
-                ],
-            }
-        ],
-        "Stop": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "cartographer hook flush",
-                    }
-                ]
-            }
-        ],
-        "SessionStart": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "cartographer hook preload",
-                    }
-                ]
-            }
-        ],
-        "UserPromptSubmit": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "cartographer hook retrieve",
-                    }
-                ]
-            }
-        ],
-    }
-}
 
-# MCP server entries written into .mcp.json.
-# Uses the `cartographer-vdb-server` / `cartographer-kg-server` entry points
-# installed on PATH by pyproject.toml [project.scripts].
-_MCP_SERVERS = {
-    "mcpServers": {
-        "cartographer-vdb": {
-            "command": "cartographer-vdb-server",
-            "env": {"CARTO_WORKSPACE": "${workspaceFolder}"},
-        },
-        "cartographer-kg": {
-            "command": "cartographer-kg-server",
-            "env": {"CARTO_WORKSPACE": "${workspaceFolder}"},
-        },
+def _mcp_servers(workspace: Path) -> dict:
+    """Return .mcp.json content using HTTP transport with workspace in the URL.
+
+    Enterprise environments often block stdio MCP servers. We use HTTP localhost
+    instead — one global `cartographer serve` handles all projects. The workspace
+    path is passed as a query parameter so the server routes each request to the
+    correct index without needing a separate server instance per project.
+    """
+    from cartographer.commands.serve import VDB_DEFAULT_PORT, KG_DEFAULT_PORT
+    ws = str(workspace)
+    return {
+        "mcpServers": {
+            "cartographer-vdb": {
+                "url": f"http://localhost:{VDB_DEFAULT_PORT}/mcp?workspace={ws}",
+            },
+            "cartographer-kg": {
+                "url": f"http://localhost:{KG_DEFAULT_PORT}/mcp?workspace={ws}",
+            },
+        }
     }
-}
 
 
 def run(
@@ -107,10 +64,10 @@ def run(
     _, claude_md_changed = claude_merge.ensure_claude_md(workspace)
     console.print(f"  CLAUDE.md: {'updated' if claude_md_changed else 'already up to date'}")
 
-    _, settings_changed = claude_merge.ensure_settings_json(workspace, _HOOKS_SETTINGS)
+    _, settings_changed = claude_merge.ensure_settings_json(workspace, {})
     console.print(f"  .claude/settings.json: {'updated' if settings_changed else 'already up to date'}")
 
-    _, mcp_changed = claude_merge.ensure_mcp_json(workspace, _MCP_SERVERS)
+    _, mcp_changed = claude_merge.ensure_mcp_json(workspace, _mcp_servers(workspace))
     console.print(f"  .mcp.json: {'updated' if mcp_changed else 'already up to date'}")
 
     _install_skills(workspace)
@@ -140,8 +97,12 @@ def run(
     console.print(f"  {config_mod.CONFIG_FILENAME} written")
 
     if not config_mod.local_config_path(workspace).exists():
-        config_mod.save_local_override(workspace, config_mod.LocalOverrideConfig())
+        import secrets
+        promotion_token = secrets.token_hex(32) if topology == "central" else ""
+        config_mod.save_local_override(workspace, config_mod.LocalOverrideConfig(promotion_token=promotion_token))
         console.print(f"  {config_mod.LOCAL_CONFIG_FILENAME} written")
+        if topology == "central":
+            console.print(f"  [yellow]promotion_token generated — keep it secret; set [central_vdb] and [central_kg] passwords before promoting[/yellow]")
 
     _ensure_gitignore(workspace)
 
@@ -158,14 +119,14 @@ def run(
 
 
 def _install_skills(workspace: Path) -> None:
-    """Copy SKILL.md files from the bundled plugin into .claude/skills/.
+    """Copy SKILL.md files from the bundled plugin into .claude/commands/.
 
-    Claude Code reads skills from .claude/<skill-name>.md when the user invokes
-    /<skill-name> in a session. Idempotent: overwrites with the latest version.
+    Claude Code reads custom slash commands from .claude/commands/<name>.md; the
+    file name becomes the /<name> command. Idempotent: overwrites with the latest version.
     """
     from cartographer.runtime import SKILLS_DIR
 
-    skills_dest = workspace / ".claude" / "skills"
+    skills_dest = workspace / ".claude" / "commands"
     skills_dest.mkdir(parents=True, exist_ok=True)
 
     for skill_dir in SKILLS_DIR.iterdir():
@@ -180,7 +141,14 @@ def _ensure_gitignore(workspace: Path) -> None:
     if not (workspace / ".git").exists():
         return
     gitignore = workspace / ".gitignore"
-    required = [config_mod.LOCAL_CONFIG_FILENAME, str(LOCAL_INDEX_REL) + "/"]
+    # These files contain machine-specific absolute paths generated by `cartographer init`.
+    # Each developer runs init after cloning; only cartographer.toml and CLAUDE.md are committed.
+    required = [
+        config_mod.LOCAL_CONFIG_FILENAME,
+        str(LOCAL_INDEX_REL) + "/",
+        ".mcp.json",
+        ".claude/settings.json",
+    ]
     lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
     missing = [entry for entry in required if entry not in lines]
     if not missing:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from cartographer.commands import detect, doctor, init, promote, recall, seed
+from cartographer.commands import detect, doctor, init, promote, recall, seed, serve
 from cartographer.commands import hook as hook_cmd
 from cartographer.commands import stack as stack_cmd
 from cartographer.commands import ui_cmd
@@ -41,6 +41,7 @@ app.command("promote")(promote.run)
 app.command("recall")(recall.run)
 app.command("ui")(ui_cmd.run)
 app.command("doctor")(doctor.run)
+app.command("serve")(serve.run)
 
 
 if __name__ == "__main__":

@@ -32,13 +32,13 @@ A second developer joins a project. After a branch merges to main, they see the 
 
 | Component | What ships |
 |---|---|
-| Central VDB drivers | At minimum one: pgvector (Aurora PostgreSQL). Qdrant as second option. |
-| Central KG drivers | At minimum one: Neo4j. Neptune as second option. |
+| Central VDB driver | pgvector (PostgreSQL + pgvector extension). Cloud-agnostic; runs on any PostgreSQL host. |
+| Central KG driver | Neo4j. Cloud-agnostic; runs locally via Docker, on Neo4j Aura, or any self-hosted instance. |
 | Promotion pipeline | `cartographer promote` writes to global scope; idempotent upserts keyed on artifact identity |
 | Promotion triggers | CI step documented and templated; post-merge hook script provided; manual command working |
 | Global index read order | Local-first in recall hooks and recall skill; results tagged by origin (local/global) |
-| Central backend auth | API key per developer; configured in `.cartographer.local.toml` or env vars |
-| `doctor` central checks | VDB endpoint reachable; KG endpoint reachable; API key accepted |
+| Central backend auth | Per-developer connection details in `.cartographer.local.toml` or env vars; provisioned by admin |
+| `doctor` central checks | pgvector reachable; Neo4j reachable; credentials accepted |
 | Scope write protection | Promotion token enforced in both MCP servers; global write rejected outside promotion |
 | Two-developer walkthrough | Documented runbook for setting up and verifying two developers sharing a global index |
 
@@ -54,46 +54,41 @@ A second developer joins a project. After a branch merges to main, they see the 
 
 ## Component breakdown
 
-### 1. Central VDB drivers
+### 1. Central VDB driver
 
-**pgvector driver** (`cli/src/cartographer/drivers/vdb/pgvector.py`):
-- Implement full VDB driver base class
-- Connection: `asyncpg` or `psycopg2` against the configured `vdb.endpoint`
-- Auth: API key passed as a connection parameter or header depending on the hosting model
-- Collection mapping: each `carto_<project_id>_<scope>` collection maps to a pgvector table
-- `ensure_collection`: create table with vector column of correct dimensionality if not exists
-- `upsert`: INSERT ... ON CONFLICT DO UPDATE keyed on chunk `id`
-- `query`: `SELECT ... ORDER BY embedding <=> $1 LIMIT $2` with optional `artifact_type` filter
-- `delete`: DELETE WHERE id = ANY($1)
-- `collection_stats`: SELECT COUNT(*) and metadata from information_schema
+**pgvector driver** (`cli/src/cartographer/indexing/vdb_pgvector.py`):
+- Implement the same interface as the local LanceDB driver
+- Connection: `psycopg2` using host, port, user, password, database from `.cartographer.local.toml` or env vars
+- Collection mapping: each `carto_<project_id>_global` maps to a pgvector table with a `vector(<dim>)` column
+- `ensure_collection`: `CREATE TABLE IF NOT EXISTS` with vector column of correct dimensionality
+- `upsert`: `INSERT ... ON CONFLICT (id) DO UPDATE` keyed on chunk `id`
+- `query`: `SELECT ... ORDER BY embedding <=> %s LIMIT %s` with optional SQL filter
+- `delete`: `DELETE WHERE id = ANY(%s)`
+- `collection_stats`: `SELECT artifact_type, COUNT(*) FROM ... GROUP BY artifact_type`
 
-**Qdrant driver** (`cli/src/cartographer/drivers/vdb/qdrant.py`):
-- Implement full VDB driver base class against Qdrant HTTP API
-- Auth: API key in `api-key` header
-- Collection per `(project_id, scope)` pair
-- All five tool operations implemented
-
-**ADR required:** One ADR per new driver added (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
+**ADR required:** One ADR for the pgvector driver (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 **Reference:** [contracts/vdb-tools.md: Driver implementation requirements](../contracts/vdb-tools.md)
 
 ---
 
-### 2. Central KG drivers
+### 2. Central KG driver
 
-**Neo4j driver** (`cli/src/cartographer/drivers/kg/neo4j.py`):
-- Implement full KG driver base class
-- Connection: `neo4j` Python driver against the configured `kg.endpoint`
-- Auth: API key as the password in the connection URI, or bearer token depending on deployment
-- Namespace mapping: each `carto_<project_id>_<scope>` namespace maps to a Neo4j database or a labeled subgraph
-- All eight tool operations implemented using Cypher queries
-- `kg_neighbors`: multi-hop Cypher traversal with depth, edge type, and direction filters
-- Cascade delete: Cypher `DETACH DELETE` handles node + edge deletion atomically
+**Neo4j driver** (`cli/src/cartographer/indexing/kg_neo4j.py`):
+- Implement the same interface as the local Kuzu driver
+- Connection: `neo4j` Python driver using the Bolt URI, user, and password from `.cartographer.local.toml` or env vars
+- Namespace mapping: each `carto_<project_id>_global` maps to a labeled subgraph (node label prefix + relationship type prefix)
+- All operations implemented using Cypher queries
+- `ensure_namespace`: create index constraints if absent; idempotent
+- `upsert_nodes`: `MERGE (n:Artifact {id: $id}) ON CREATE SET ... ON MATCH SET ...`
+- `upsert_edges`: `MATCH (s), (d) MERGE (s)-[r:RelatesTo {type: $type}]->(d) ON CREATE SET ... ON MATCH SET ...`
+- `query`: pass-through Cypher execution with params
+- `neighbors`: multi-hop Cypher traversal with configurable depth (max 4)
+- `delete_nodes`: `MATCH (n {id: $id}) DETACH DELETE n` (cascade-deletes attached edges)
+- `delete_edges`: `MATCH (s)-[r:RelatesTo {type: $type}]->(d) DELETE r`
+- `namespace_stats`: `MATCH (n:Artifact) RETURN count(*)` + edge count query
 
-**Neptune driver** (`cli/src/cartographer/drivers/kg/neptune.py`):
-- Implement full KG driver base class against Neptune's HTTP API (Gremlin or openCypher)
-- Auth: SigV4 signing or API key depending on Neptune deployment mode
-- All eight tool operations implemented
+**ADR required:** One ADR for the Neo4j driver.
 
 **Reference:** [contracts/kg-tools.md: Driver implementation requirements](../contracts/kg-tools.md)
 
@@ -183,14 +178,14 @@ Add to the `cartographer doctor` command:
 
 ---
 
-## Open questions to resolve before starting
+## Open questions resolved
 
-| Question | Blocks |
+| Question | Decision |
 |---|---|
-| Choice of first central VDB driver (pgvector vs Qdrant) | Driver implementation priority in step 2 |
-| Choice of first central KG driver (Neo4j vs Neptune) | Driver implementation priority in step 3 |
-| Promotion token implementation detail | Scope write protection in MCP servers |
-| Central backend provisioning: who provisions the Aurora/Neo4j instance? | Two-developer walkthrough runbook |
+| Central VDB driver | pgvector. Cloud-agnostic, runs on any PostgreSQL. No AWS dependency. |
+| Central KG driver | Neo4j. Cloud-agnostic, runs locally via Docker or on Neo4j Aura. Neptune rejected -- AWS-only. |
+| Promotion token | Random secret generated at `cartographer init` (central topology), stored in `.cartographer.local.toml`. |
+| Central backend provisioning | Admin-managed. Admin provisions once (pgvector database + Neo4j instance), shares connection details with the team. Developers add details to their gitignored `.cartographer.local.toml`. |
 
 ---
 

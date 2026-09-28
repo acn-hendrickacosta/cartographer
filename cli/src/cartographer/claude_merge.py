@@ -23,12 +23,47 @@ BEGIN_MARKER = "<!-- BEGIN CARTOGRAPHER -->"
 END_MARKER = "<!-- END CARTOGRAPHER -->"
 
 CARTOGRAPHER_CLAUDE_MD_BLOCK = f"""{BEGIN_MARKER}
-## Cartographer
+## Cartographer knowledge index
 
-This project uses Cartographer for development standards and a persistent local
-knowledge index. Standards live under `.claude/standards/`. Project config is in
-`cartographer.toml`. Do not edit the content between these markers by hand; run
-`cartographer init` or `cartographer stack add <name>` instead.
+This project has a persistent knowledge index. **Always use the MCP tools below before
+answering questions about the codebase** — do not rely on memory or file browsing alone.
+
+### MCP tools
+
+- **cartographer-vdb** — semantic vector search over all indexed files, specs, and docs.
+  Call this at the start of every task to find relevant context.
+  Use for: finding files related to a concept, understanding what a module does,
+  locating specs or decisions relevant to your task.
+
+- **cartographer-kg** — knowledge graph queries (Cypher) over artifact relationships.
+  Use for: finding what implements a spec, what calls a function, what imports a module,
+  what extends a class, and traversing relationships between components.
+
+  Available edge types on `RelatesTo`:
+  - `calls` — function A calls function B (AST-derived, high confidence)
+  - `imports` — file A imports file B (AST-derived, high confidence)
+  - `extends` — class A extends class B (AST-derived, high confidence)
+  - `defines` — file defines a symbol
+  - `implements_spec` — code or doc references a spec
+  - `depends_on` — semantic dependency (LLM-inferred, only present with --enrich)
+
+  Example queries:
+  ```
+  MATCH (a:Artifact)-[r:RelatesTo {{type: 'calls'}}]->(b:Artifact)
+  WHERE b.attrs CONTAINS 'my_function' RETURN a.path LIMIT 20
+
+  MATCH (a:Artifact)-[r:RelatesTo {{type: 'extends'}}]->(b:Artifact)
+  WHERE b.attrs CONTAINS 'BaseClass' RETURN a.path LIMIT 10
+  ```
+
+### When to call them
+
+- **Session start**: call `cartographer-vdb` with a broad query about the task at hand.
+- **Before editing**: search for existing implementations, related specs, and dependencies.
+- **When asked about the codebase**: always search before answering from memory.
+
+Standards live under `.claude/standards/`. Re-index after major changes with `cartographer seed`.
+Do not edit the content between these markers by hand.
 {END_MARKER}
 """
 
@@ -116,8 +151,17 @@ def ensure_claude_md(workspace: Path) -> tuple[Path, bool]:
         return path, True
 
     text = path.read_text(encoding="utf-8")
-    if BEGIN_MARKER in text:
-        return path, False
+    if BEGIN_MARKER in text and END_MARKER in text:
+        # Replace the existing block in-place so content stays current
+        start = text.index(BEGIN_MARKER)
+        end = text.index(END_MARKER) + len(END_MARKER)
+        existing_block = text[start:end]
+        new_block = CARTOGRAPHER_CLAUDE_MD_BLOCK.strip()
+        if existing_block == new_block:
+            return path, False
+        backup(path, workspace)
+        path.write_text(text[:start] + new_block + text[end:], encoding="utf-8")
+        return path, True
 
     backup(path, workspace)
     separator = "\n\n" if not text.endswith("\n\n") else ""
@@ -125,13 +169,31 @@ def ensure_claude_md(workspace: Path) -> tuple[Path, bool]:
     return path, True
 
 
+def _has_cartographer_command(hook_group: Any) -> bool:
+    """Return True if a hook group dict contains any 'cartographer hook' command."""
+    if not isinstance(hook_group, dict):
+        return False
+    for hook in hook_group.get("hooks", []):
+        if isinstance(hook, dict) and "cartographer hook" in hook.get("command", ""):
+            return True
+    return False
+
+
 def deep_merge_settings(existing: dict[str, Any], additions: dict[str, Any]) -> dict[str, Any]:
     """Deep-merge two settings.json-shaped dicts. `additions` wins on scalar
-    conflicts; lists are concatenated and deduped by value; dicts recurse."""
+    conflicts; hook lists evict old Cartographer entries before appending new ones;
+    other lists are concatenated and deduped by value; dicts recurse."""
     merged = copy.deepcopy(existing)
     for key, value in additions.items():
         if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
             merged[key] = deep_merge_settings(merged[key], value)
+        elif key == "hooks" and isinstance(merged.get(key), dict) and isinstance(value, dict):
+            # Per-event hook lists: evict stale Cartographer entries before adding new ones
+            merged_hooks = copy.deepcopy(merged[key])
+            for event, event_hooks in value.items():
+                existing_event = [h for h in merged_hooks.get(event, []) if not _has_cartographer_command(h)]
+                merged_hooks[event] = existing_event + [h for h in event_hooks if h not in existing_event]
+            merged[key] = merged_hooks
         elif key in merged and isinstance(merged[key], list) and isinstance(value, list):
             combined = merged[key] + [item for item in value if item not in merged[key]]
             merged[key] = combined

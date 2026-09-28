@@ -58,6 +58,12 @@ class StacksSection(BaseModel):
     active: list[str] = Field(default_factory=list)
 
 
+class CentralSection(BaseModel):
+    """Committed config: which central drivers to use (no secrets)."""
+    vdb_driver: str = "pgvector"
+    kg_driver: str = "neo4j"
+
+
 class CartographerConfig(BaseModel):
     project: ProjectSection
     topology: TopologySection = Field(default_factory=TopologySection)
@@ -66,6 +72,7 @@ class CartographerConfig(BaseModel):
     isolation: IsolationSection = Field(default_factory=IsolationSection)
     retrieval: RetrievalSection = Field(default_factory=RetrievalSection)
     backends: BackendsSection = Field(default_factory=BackendsSection)
+    central: CentralSection = Field(default_factory=CentralSection)
 
     def to_toml(self) -> str:
         doc = tomlkit.document()
@@ -81,6 +88,7 @@ class CartographerConfig(BaseModel):
             "kg": self.backends.kg.model_dump(),
             "embedder": self.backends.embedder.model_dump(),
         }
+        doc["central"] = self.central.model_dump()
         return tomlkit.dumps(doc)
 
 
@@ -88,24 +96,37 @@ class LocalPathsSection(BaseModel):
     local_index_dir: str = ".cartographer/local"
 
 
-class CentralEndpointSection(BaseModel):
-    endpoint: str = ""
+class CentralVdbConfig(BaseModel):
+    """pgvector connection details -- provided by admin, stored in gitignored local override."""
+    host: str = "localhost"
+    port: int = 5432
+    user: str = "cartographer"
+    password: str = ""
+    database: str = "cartographer"
+
+
+class CentralKgConfig(BaseModel):
+    """Neo4j connection details -- provided by admin, stored in gitignored local override."""
+    uri: str = "bolt://localhost:7687"
+    user: str = "neo4j"
+    password: str = ""
 
 
 class LocalOverrideConfig(BaseModel):
     paths: LocalPathsSection = Field(default_factory=LocalPathsSection)
-    central_vdb: CentralEndpointSection = Field(default_factory=CentralEndpointSection)
-    central_kg: CentralEndpointSection = Field(default_factory=CentralEndpointSection)
+    central_vdb: CentralVdbConfig = Field(default_factory=CentralVdbConfig)
+    central_kg: CentralKgConfig = Field(default_factory=CentralKgConfig)
+    promotion_token: str = ""
 
     def to_toml(self) -> str:
         doc = tomlkit.document()
         doc.add(tomlkit.comment("Local override: per-developer paths and central-backend secrets."))
         doc.add(tomlkit.comment("Never commit this file."))
         doc["paths"] = self.paths.model_dump()
-        doc["central"] = {
-            "vdb": self.central_vdb.model_dump(),
-            "kg": self.central_kg.model_dump(),
-        }
+        doc["central_vdb"] = self.central_vdb.model_dump()
+        doc["central_kg"] = self.central_kg.model_dump()
+        if self.promotion_token:
+            doc["promotion_token"] = self.promotion_token
         return tomlkit.dumps(doc)
 
 
@@ -133,6 +154,7 @@ def load_config(workspace: Path) -> CartographerConfig:
             kg=BackendDriver(**backends.get("kg", {"driver": "kuzu"})),
             embedder=BackendDriver(**backends.get("embedder", {"driver": "local"})),
         ),
+        central=CentralSection(**data.get("central", {})),
     )
 
 
@@ -147,11 +169,11 @@ def load_local_override(workspace: Path) -> LocalOverrideConfig:
     if not path.exists():
         return LocalOverrideConfig()
     data = tomlkit.parse(path.read_text(encoding="utf-8"))
-    central = data.get("central", {})
     return LocalOverrideConfig(
         paths=LocalPathsSection(**data.get("paths", {})),
-        central_vdb=CentralEndpointSection(**central.get("vdb", {})),
-        central_kg=CentralEndpointSection(**central.get("kg", {})),
+        central_vdb=CentralVdbConfig(**data.get("central_vdb", {})),
+        central_kg=CentralKgConfig(**data.get("central_kg", {})),
+        promotion_token=str(data.get("promotion_token", "")),
     )
 
 

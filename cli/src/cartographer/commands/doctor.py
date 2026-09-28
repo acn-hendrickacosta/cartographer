@@ -46,7 +46,37 @@ def run(
         healthy = False
 
     if cfg.topology.mode == "central":
-        console.print("[yellow]INFO[/yellow] central backend driver not yet implemented (Phase 2)")
+        override = config_mod.load_local_override(workspace)
+        if not override.promotion_token:
+            console.print("[yellow]INFO[/yellow] central: promotion_token not set in .cartographer.local.toml")
+        else:
+            console.print("[green]OK[/green]   central: promotion_token present")
+
+        try:
+            from cartographer.indexing.central import get_central_vdb
+            central_vdb = get_central_vdb(cfg, override)
+            if central_vdb.is_reachable():
+                console.print("[green]OK[/green]   central VDB (pgvector) is reachable")
+            else:
+                console.print("[red]FAIL[/red] central VDB (pgvector) is not reachable; check [central_vdb] in .cartographer.local.toml")
+                healthy = False
+        except (ValueError, NotImplementedError) as exc:
+            console.print(f"[yellow]INFO[/yellow] central VDB: {exc}")
+        except ImportError:
+            console.print("[yellow]INFO[/yellow] central VDB: psycopg2 not installed; run: pip install 'cartographer[central]'")
+
+        try:
+            from cartographer.indexing.central import get_central_kg
+            central_kg = get_central_kg(cfg, override)
+            if central_kg.is_reachable():
+                console.print("[green]OK[/green]   central KG (Neo4j) is reachable")
+            else:
+                console.print("[red]FAIL[/red] central KG (Neo4j) is not reachable; check [central_kg] in .cartographer.local.toml")
+                healthy = False
+        except (ValueError, NotImplementedError) as exc:
+            console.print(f"[yellow]INFO[/yellow] central KG: {exc}")
+        except ImportError:
+            console.print("[yellow]INFO[/yellow] central KG: neo4j not installed; run: pip install 'cartographer[central]'")
 
     mcp_path = workspace / ".mcp.json"
     mcp_wired = False

@@ -65,7 +65,7 @@ The single most important acceptance gate: a developer working in a real Claude 
 | `detect` | Workspace scanner; report formatter |
 | `init` | Config writer; workspace scaffolder; CLAUDE.md merger; settings.json merger; mcp.json merger; VDB + KG provisioning calls; registry upsert; gitignore writer |
 | `stack add` | Pack resolver (bundled only in Phase 1); pack file copier; `active_stacks` updater |
-| `seed` | File resolver; plain-text reader; ingestion pipeline invocation; progress reporter |
+| `seed` | File resolver; plain-text reader; ingestion pipeline invocation; progress reporter; `--enrich` flag wiring to Claude-based KG enricher |
 | `promote` | No-op with topology check; clear message that central is not configured |
 | `recall` | Registry reader; tenant check; VDB query; KG neighborhood query; result merger; output formatter |
 | `ui` | FastAPI server; static file serving from `cli/src/cartographer/ui/`; VDB search endpoint; KG graph endpoint; registry endpoint; stats endpoint; browser open on start |
@@ -80,8 +80,9 @@ The single most important acceptance gate: a developer working in a real Claude 
 - `text_extractor.py` -- plain text only in Phase 1; binary returns a skip warning
 - `chunker.py` -- code (symbol boundary), spec (section boundary), doc (heading boundary)
 - `embedder.py` -- wraps fastembed driver
-- `graph_extractor.py` -- node and edge extraction from code, spec, and doc artifacts
-- `pipeline.py` -- orchestrates the full extract -> chunk -> embed -> upsert sequence
+- `graph_extractor.py` -- regex-based node and edge extraction; optional Claude enrichment via `kg_enricher.py`
+- `kg_enricher.py` -- calls `claude -p` subprocess to extract semantic relationships; returns structured `EnrichmentResult`; falls back silently if `claude` is not on PATH
+- `pipeline.py` -- orchestrates the full extract -> chunk -> embed -> upsert sequence; threads `enrich` flag through to `graph_extractor`
 
 **Reference:** [components/cli.md](../components/cli.md), [APPLICATION_ARCHITECTURE.md sections 1.1-1.3](../APPLICATION_ARCHITECTURE.md)
 

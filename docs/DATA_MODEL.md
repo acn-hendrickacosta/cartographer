@@ -113,7 +113,7 @@ One logical namespace per project, split by scope. Namespaces are isolated: no e
 | `id` | string | Artifact identity. Same key as the VDB. |
 | `project_id` | string | Stable project identifier. |
 | `scope` | enum | `local` or `global`. |
-| `type` | enum | `module`, `symbol`, `spec`, `doc`. See node type table below. |
+| `type` | enum | `module`, `symbol`, `spec`, `doc`, `stub`, `concept`. See node type table below. |
 | `path` | string | Repo-relative file path. |
 | `name` | string | Human-readable name: file name, symbol name, spec id, or doc heading. |
 | `attrs` | map | Type-specific metadata. See node type table. |
@@ -122,10 +122,14 @@ One logical namespace per project, split by scope. Namespaces are isolated: no e
 
 | Node type | Represents | Key attrs |
 |---|---|---|
-| `module` | A code file or package | `language`, `package` |
-| `symbol` | A function, class, or method within a file | `kind` (function/class/method), `signature` |
+| `module` | A code file or package | `language`, `package`, `summary` (when Claude enrichment is enabled) |
+| `symbol` | A function, class, or method within a file | `kind` (function/class/method), `line` |
 | `spec` | A specification artifact or a section within one | `spec_id`, `status` (draft/approved/superseded) |
 | `doc` | A documentation file or a section within one | `doc_type` (readme/adr/runbook/wiki/other), `heading` |
+| `stub` | A placeholder for a cross-file callee or parent that has not been ingested yet | `symbol` (the name), resolved to a real node when the file is ingested |
+| `concept` | A semantic target produced by Claude enrichment that has no backing file | `name` |
+
+`stub` nodes are created at seed time when the AST parser resolves a `calls`, `imports`, or `extends` edge to a symbol in a file that either has not been ingested yet or lives outside the project. If the target file is later ingested, its real node upsert overwrites the stub (same ID). `concept` nodes are created by `--enrich` and represent LLM-identified dependencies or spec references with no backing file.
 
 Keep `attrs` small. Add a key only when a recall query needs it. Resist modeling everything.
 
@@ -141,16 +145,37 @@ Keep `attrs` small. Add a key only when a recall query needs it. Resist modeling
 
 **Edge types:**
 
+AST-extracted (always present for supported languages, high confidence):
+
 | Edge type | Meaning | Example |
 |---|---|---|
-| `defines` | A module defines a symbol | `src/auth.py` -> `login()` |
-| `references` | A symbol or file references another | `billing.py#charge()` -> `auth.py#login()` |
-| `implements_spec` | A code symbol or module implements a spec requirement | `auth.py#login()` -> `spec/AUTH-001` |
-| `depends_on` | A module or package depends on another | `billing/` -> `auth/` |
-| `documents` | A doc artifact describes a code or spec artifact | `docs/auth.md` -> `spec/AUTH-001` |
-| `supersedes` | A spec or doc version supersedes an earlier one | `spec/AUTH-002` -> `spec/AUTH-001` |
+| `defines` | A file defines a symbol | `src/auth.py` -> `auth.py::login` |
+| `calls` | A function calls another function | `auth.py::login` -> `config.py::load_config` |
+| `imports` | A file imports another file or module | `src/auth.py` -> `src/config.py` |
+| `extends` | A class extends a base class | `auth.py::SpecValidator` -> `base.py::BaseValidator` |
 
-Add a new edge type only when a recall query pattern requires it. Undirected relationships are modeled as two directed edges.
+Regex-extracted (always present, all file types):
+
+| Edge type | Meaning | Example |
+|---|---|---|
+| `implements_spec` | A code file references a spec requirement in a comment or docstring | `auth.py` -> `spec/AUTH-001` |
+
+Claude-enriched (present only when `cartographer seed --enrich` is used, spec and doc files only):
+
+| Edge type | Meaning | Example |
+|---|---|---|
+| `depends_on` | Semantic dependency identified by Claude | `billing/` -> `auth/` |
+| `validates` | A module validates another artifact | `ValidationService` -> `StyleGuidePage` |
+| `renders` | A component renders another | `PageRenderer` -> `StyleGuideContent` |
+| `persists` | A module persists data to a store | `Repository` -> `PageRecord` |
+| `orchestrates` | A module coordinates other components | `IngestionPipeline` -> `Chunker` |
+| `produces` | A module produces an output artifact | `Exporter` -> `ValidationReport` |
+| `consumes` | A module consumes an input artifact | `Parser` -> `RawPageData` |
+| `configures` | A module configures another | `AppConfig` -> `DatabaseDriver` |
+| `documents` | A doc describes a code or spec artifact | `docs/auth.md` -> `spec/AUTH-001` |
+| `supersedes` | A spec version supersedes an earlier one | `spec/AUTH-002` -> `spec/AUTH-001` |
+
+Add a new edge type only when a recall query pattern requires it. Undirected relationships are modeled as two directed edges. New edge types require an update to `docs/standards/edge-taxonomy.md` (Phase 4).
 
 ### 4.4 Graph queries used in recall
 

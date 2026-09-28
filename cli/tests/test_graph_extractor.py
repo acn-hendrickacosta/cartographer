@@ -67,11 +67,11 @@ def test_extract_spec_ref_creates_implements_spec_edge():
     assert "implements_spec" in edge_types
 
 
-def test_extract_relative_import_creates_depends_on_edge():
+def test_extract_relative_import_creates_imports_edge():
     code = "from .utils import helper\n\ndef main():\n    pass\n"
     result = _extract("src/main.py", code, ArtifactType.CODE)
     edge_types = {e.type for e in result.edges}
-    assert "depends_on" in edge_types
+    assert "imports" in edge_types
 
 
 def test_extract_no_duplicate_symbols():

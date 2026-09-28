@@ -123,15 +123,15 @@ All VDB and KG operations go through a driver interface. Local and central backe
 
 `Scope` is either `local` or `global`. Both drivers expose the same operations; scope selects which store instance they address.
 
-### 4.3 Default and upgrade paths
+### 4.3 Local and central backends
 
-| Backend concern | Local default | Central upgrade path (cloud-agnostic) |
+| Backend | Local (always embedded) | Central (admin-provisioned) |
 |---|---|---|
-| VDB | LanceDB embedded, on-disk in the workspace | Any server implementing the driver contract: Qdrant, Milvus, pgvector, OpenSearch, Weaviate |
-| KG | Kuzu embedded, on-disk in the workspace | Any server implementing the driver contract: Neo4j, PuppyGraph, Amazon Neptune, ArangoDB |
-| Embedder | fastembed (local model, no egress) | API embedder if the team explicitly accepts egress |
+| VDB | LanceDB embedded -- ships with the CLI install, on-disk in `.cartographer/local/`, no service required, not configurable | pgvector (primary). Any backend implementing the driver contract: Qdrant, Milvus, OpenSearch, Weaviate. |
+| KG | Kuzu embedded -- ships with the CLI install, on-disk in `.cartographer/local/`, no service required, not configurable | Neo4j (primary). Any backend implementing the driver contract: PuppyGraph, ArangoDB. |
+| Embedder | fastembed local model (no egress) -- same in both topologies by default | API embedder if the team explicitly accepts that source code leaves the machine. |
 
-Local defaults require no running service and no cloud account. The central upgrade path requires only a driver implementation and a config change.
+The local backends are fixed. Developers need zero local infrastructure beyond what ships with the pip install. The central backend is a configuration choice made by the team admin and applied once per project; developers receive connection details and add them to their gitignored `.cartographer.local.toml`.
 
 ---
 
@@ -206,7 +206,7 @@ This section describes one concrete way to run the central topology on AWS. It i
 | Concern | AWS service | Notes |
 |---|---|---|
 | Central VDB | Amazon Aurora PostgreSQL + pgvector | Implements the VDB driver contract. Aurora Serverless v2 scales to zero for intermittent workloads. pgvector is a driver swap from local LanceDB, not an architecture change. |
-| Central KG | Amazon Neptune Serverless | Implements the KG driver contract. Gremlin-compatible. Scales to zero capacity units. Neptune Analytics available as an add-on for batch graph algorithms. |
+| Central KG | Neo4j (self-hosted or Neo4j Aura) | Implements the KG driver contract. Cloud-agnostic: runs on any cloud or on-premises. Neo4j Aura is the managed offering. Cypher query language. Preferred over Neptune because it is not AWS-dependent and supports local development via Docker. |
 | Embedder | Runs locally on each developer machine by default | Source code does not leave the machine. An Amazon Bedrock embedder can be configured as an opt-in override for teams that accept egress. |
 | Promotion trigger | AWS CodeBuild (CI step on merge to main), or a GitHub Actions workflow | Runs `cartographer promote` against the central backend after a successful merge build. |
 
