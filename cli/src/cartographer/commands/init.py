@@ -8,6 +8,7 @@ itself idempotent, per PROJECT_BRIEF.md Section 6.1.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import typer
@@ -21,6 +22,71 @@ from cartographer.indexing import kg, vdb
 console = Console()
 
 LOCAL_INDEX_REL = Path(".cartographer") / "local"
+
+# Hook entries written into .claude/settings.json.
+# Uses `cartographer hook <name>` so no absolute path is needed — the cartographer
+# binary is on PATH after pip install.
+_HOOKS_SETTINGS = {
+    "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "Write|Edit|MultiEdit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "cartographer hook enqueue",
+                    }
+                ],
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "cartographer hook flush",
+                    }
+                ]
+            }
+        ],
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "cartographer hook preload",
+                    }
+                ]
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "cartographer hook retrieve",
+                    }
+                ]
+            }
+        ],
+    }
+}
+
+# MCP server entries written into .mcp.json.
+# Uses the `cartographer-vdb-server` / `cartographer-kg-server` entry points
+# installed on PATH by pyproject.toml [project.scripts].
+_MCP_SERVERS = {
+    "mcpServers": {
+        "cartographer-vdb": {
+            "command": "cartographer-vdb-server",
+            "env": {"CARTO_WORKSPACE": "${workspaceFolder}"},
+        },
+        "cartographer-kg": {
+            "command": "cartographer-kg-server",
+            "env": {"CARTO_WORKSPACE": "${workspaceFolder}"},
+        },
+    }
+}
 
 
 def run(
@@ -41,13 +107,14 @@ def run(
     _, claude_md_changed = claude_merge.ensure_claude_md(workspace)
     console.print(f"  CLAUDE.md: {'updated' if claude_md_changed else 'already up to date'}")
 
-    _, settings_changed = claude_merge.ensure_settings_json(workspace)
-    console.print(
-        f"  .claude/settings.json: {'updated' if settings_changed else 'unchanged (no plugin entries yet)'}"
-    )
+    _, settings_changed = claude_merge.ensure_settings_json(workspace, _HOOKS_SETTINGS)
+    console.print(f"  .claude/settings.json: {'updated' if settings_changed else 'already up to date'}")
 
-    _, mcp_changed = claude_merge.ensure_mcp_json(workspace)
-    console.print(f"  .mcp.json: {'updated' if mcp_changed else 'unchanged (no plugin entries yet)'}")
+    _, mcp_changed = claude_merge.ensure_mcp_json(workspace, _MCP_SERVERS)
+    console.print(f"  .mcp.json: {'updated' if mcp_changed else 'already up to date'}")
+
+    _install_skills(workspace)
+    console.print("  skills: archaeology + recall installed")
 
     apply_pack(workspace, "cross-stack")
     console.print("  standards: cross-stack baseline applied")
@@ -88,6 +155,25 @@ def run(
     console.print(f"  registered project {record.project_id} in {registry.registry_path()}")
 
     console.print("[bold green]init complete[/bold green]")
+
+
+def _install_skills(workspace: Path) -> None:
+    """Copy SKILL.md files from the bundled plugin into .claude/skills/.
+
+    Claude Code reads skills from .claude/<skill-name>.md when the user invokes
+    /<skill-name> in a session. Idempotent: overwrites with the latest version.
+    """
+    from cartographer.runtime import SKILLS_DIR
+
+    skills_dest = workspace / ".claude" / "skills"
+    skills_dest.mkdir(parents=True, exist_ok=True)
+
+    for skill_dir in SKILLS_DIR.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        skill_md = skill_dir / "SKILL.md"
+        if skill_md.exists():
+            shutil.copy2(skill_md, skills_dest / f"{skill_dir.name}.md")
 
 
 def _ensure_gitignore(workspace: Path) -> None:

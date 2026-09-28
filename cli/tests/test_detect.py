@@ -9,8 +9,8 @@ def test_detect_reports_create_for_empty_workspace(tmp_path: Path) -> None:
 
     assert by_name["CLAUDE.md"].exists is False
     assert by_name["CLAUDE.md"].action == "create"
-    assert by_name[".mcp.json"].action == "unchanged"
-    assert by_name[str(claude_merge.SETTINGS_JSON_REL)].action == "unchanged"
+    assert by_name[".mcp.json"].action == "create"
+    assert by_name[str(claude_merge.SETTINGS_JSON_REL)].action == "create"
 
 
 def test_detect_reports_merge_for_existing_claude_md_without_marker(tmp_path: Path) -> None:

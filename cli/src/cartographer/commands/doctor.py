@@ -1,4 +1,4 @@
-"""`cartographer doctor`: validate config, local index reachability, and plugin wiring."""
+"""`cartographer doctor`: validate config, local index reachability, and MCP wiring."""
 
 from __future__ import annotations
 
@@ -49,18 +49,18 @@ def run(
         console.print("[yellow]INFO[/yellow] central backend driver not yet implemented (Phase 2)")
 
     mcp_path = workspace / ".mcp.json"
-    plugin_wired = False
+    mcp_wired = False
     if mcp_path.exists():
         try:
             data = json.loads(mcp_path.read_text(encoding="utf-8"))
-            plugin_wired = "cartographer" in data.get("mcpServers", {})
+            mcp_wired = "cartographer" in data.get("mcpServers", {})
         except json.JSONDecodeError:
             pass
 
-    if plugin_wired:
-        console.print("[green]OK[/green]   Cartographer plugin MCP entries present")
+    if mcp_wired:
+        console.print("[green]OK[/green]   Cartographer MCP entries present in .mcp.json")
     else:
-        console.print("[yellow]INFO[/yellow] Cartographer plugin not installed yet (no MCP entries)")
+        console.print("[yellow]INFO[/yellow] Cartographer MCP entries not found; run 'cartographer init'")
 
     if not healthy:
         raise typer.Exit(code=1)

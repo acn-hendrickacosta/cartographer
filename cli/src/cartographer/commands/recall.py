@@ -1,8 +1,7 @@
 """`cartographer recall <query>`: query the registry then the local index.
 
-This is a debugging aid; the real path for cross-project recall is the plugin's
-recall skill (PROJECT_BRIEF.md Section 6.3), which is not built in this CLI-only
-slice. This command still enforces the same isolation rule the skill will: a query
+This is a debugging aid; the real path for cross-project recall is the bundled
+recall skill (PROJECT_BRIEF.md Section 6.3), installed by 'cartographer init'. This command still enforces the same isolation rule the skill will: a query
 never returns results for a project outside the caller's tenant.
 """
 

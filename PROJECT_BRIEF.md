@@ -6,7 +6,7 @@
 |---|---|
 | Status | Draft v0.2. CLI (Section 6.1, local topology) implemented and verified end to end; plugin, docs set, and standards web app not yet started. |
 | Owner | Hendrick |
-| Type | Reusable Claude Code plugin + CLI + shared standards + a standards web app for SME-managed, cloud-hosted standards |
+| Type | CLI + shared standards + a standards web app for SME-managed, cloud-hosted standards |
 | Audience for this doc | Claude Code, running in the working directory, tasked with generating the formal project documentation set and repo scaffold |
 | License intent | Internal first, open to contribution later |
 
@@ -63,13 +63,14 @@ Cartographer is a reusable, installable package that gives any Claude Code proje
 
 | Term | Meaning |
 |---|---|
-| KG | Knowledge graph. Lightweight by default. Nodes are code and spec artifacts, edges are relationships (defines, references, implements-spec, depends-on). |
-| VDB | Vector database. Local embedded by default. Stores embedded chunks of code, docs, and specs for semantic recall. |
+| KG | Knowledge graph. Lightweight by default. Nodes are code, spec, and documentation artifacts, edges are relationships (defines, references, implements-spec, depends-on). |
+| VDB | Vector database. Local embedded by default. Stores embedded chunks of code, specs, and documentation for semantic recall. |
 | Local index | The KG and VDB for a developer's working state, including unmerged changes. Private to that developer's machine by default. |
 | Global index | The shared KG and VDB representing merged, canonical project state. Lives in the central backend when configured. |
 | Promotion | The act of moving knowledge from local to global. Triggered by merge to the main branch. Not live sync. |
 | Artifact identity | The stable key for a KG node or a VDB chunk: file path plus symbol, or spec id. Not a commit SHA. Makes promotion idempotent. |
 | Spec | A specification artifact in the spec-driven workflow. First-class, higher-signal than code, watched specifically by ingestion. |
+| Documentation artifact | Any project documentation file ingested into the KG and VDB. Supported formats: .md, .rst, .txt, .adoc (plain text, read directly) and .docx, .pptx, .pdf (binary, text extracted via Claude local before chunking). First-class alongside code and specs. Can be seeded explicitly by a developer via `cartographer seed`. |
 | Archaeology | The bootstrap process that reads an existing codebase and builds the initial KG and VDB. |
 | Standards pack | A versioned set of development standards. A cross-stack baseline plus per-stack packs (python, react). |
 | Registry | An index of projects a developer or team has worked on, used for cross-project recall. |
@@ -82,10 +83,9 @@ Three layers, mapped to Claude Code primitives.
 
 ### 5.1 Distribution layer
 
-- A Claude Code **plugin**, distributed through a git-based marketplace, bundling skills, hooks, and MCP server definitions. Installing the plugin wires the behavior and the tool access.
-- A thin **CLI** (`cartographer`) for the things a plugin cannot do on its own: scaffolding the workspace, detecting and merging existing Claude configuration, provisioning the per-project index, and registering the project.
+- The **CLI** (`cartographer`) is the single distribution mechanism. `cartographer init` scaffolds the workspace, merges existing Claude configuration, provisions the per-project index, registers the project, and writes all hook, MCP, and skill configuration directly into the workspace.
 
-The two are complementary. The plugin owns reusable capability. The CLI owns per-project setup and state provisioning.
+A separate Claude Code plugin format was considered and deferred. The CLI already handles everything the plugin would have bundled. The plugin format can be revisited as a marketplace distribution option in a later phase, if there is demand for installation without pip.
 
 ### 5.2 Behavior layer: skills versus hooks
 
@@ -104,6 +104,9 @@ Design notes for the ingestion hook:
 - PostToolUse fires after every Write and Edit and is observe-only. Treat it as enqueue-only: mark files dirty, do not embed inline.
 - Flush the embed and KG update on the Stop event (turn boundary) or on a git commit matcher. Debounce so a burst of edits produces one flush.
 - Watch spec files specifically. In spec-driven work the spec is the anchor.
+- Documentation files are first-class artifacts. The hook watches them alongside code and specs. Supported formats: .md, .rst, .txt, .adoc, .docx, .pptx, .pdf.
+- Binary formats (.docx, .pptx, .pdf) are processed by invoking Claude locally for text extraction before chunking. No external model or API is used.
+- Developers can also seed documentation explicitly without waiting for the hook to observe edits, using `cartographer seed`.
 
 ### 5.3 State layer
 
@@ -113,9 +116,11 @@ Defaults are lightweight and local:
 
 | Store | Local default | Central upgrade path |
 |---|---|---|
-| VDB | Embedded (LanceDB or Qdrant embedded), on-disk in the workspace | Qdrant or Milvus server, or pgvector |
-| KG | Embedded property graph (Kuzu) or a SQLite-backed triple store | Neo4j or PuppyGraph over a managed store |
+| VDB | Embedded (LanceDB or Qdrant embedded), on-disk in the workspace | Any backend implementing the VDB driver contract: Qdrant, Milvus, pgvector, OpenSearch, Weaviate |
+| KG | Embedded property graph (Kuzu) or a SQLite-backed triple store | Any backend implementing the KG driver contract: Neo4j, PuppyGraph, Neptune, ArangoDB |
 | Embeddings | Local embedding model (fastembed or sentence-transformers) to avoid data egress | Same, or a configured API embedder if the team accepts egress |
+
+Both local and central backends implement the same driver interface. Switching topology is a configuration change, not a code change. The central backend is accessed over HTTPS using an API key configured in the gitignored local override or the environment.
 
 Backend selection is driven by config (Section 10) behind a driver interface, so local and central share one contract and swapping is a configuration change, not a rewrite. Default the embedder to local, because for client code the confidentiality cost of shipping source to an embedding API is usually unacceptable.
 
@@ -163,6 +168,8 @@ Commands for the first cut:
 | `stack add <name>` | Apply a stack pack (python, react) into the workspace standards. |
 | `promote` | Manual promotion of merged artifacts to the global index. No-op in local-only topology. |
 | `recall` | Convenience wrapper to query the registry, mostly a debugging aid. The real path is the recall skill. |
+| `seed <path>` | Ingest a documentation source (directory, file, or glob) into the local index immediately, outside of the normal hook-triggered ingestion cycle. |
+| `ui` | Launch a lightweight local web server (FastAPI + single-page HTML/JS) that lets a developer browse the local VDB and KG visually: semantic search, graph explorer, registry view, and index stats. |
 | `doctor` | Validate config, backend reachability, and plugin wiring. |
 
 Setup rules:
@@ -171,23 +178,24 @@ Setup rules:
 - Provision the per-project index (collection or table plus KG namespace) named deterministically from the project id.
 - Write connection and scope config so a SessionStart hook can inject the right index names at runtime.
 
-### 6.2 Plugin package layout
+### 6.2 Runtime bundle layout
 
-Standard Claude Code plugin structure. Generate the tree and manifests, stub the components.
+All runtime assets ship inside the CLI package under `cli/src/cartographer/runtime/`. There is no separate plugin directory. `cartographer init` reads from this bundle and writes the appropriate configuration into the target workspace.
 
 ```
-cartographer-plugin/
-├── .claude-plugin/
-│   └── plugin.json
-├── skills/
-│   ├── archaeology/SKILL.md
-│   └── recall/SKILL.md
-├── hooks/
-│   └── hooks.json
-├── mcp-servers/           # or .mcp.json at root
-│   └── (kg + vdb server definitions)
-├── scripts/               # hook scripts, portable via ${CLAUDE_PLUGIN_ROOT}
-└── README.md
+cli/src/cartographer/runtime/
+├── hooks.json             # hook definitions; init merges these into .claude/settings.json
+├── mcp_servers/           # MCP server entry points; installed as named commands via pyproject.toml scripts
+│   ├── vdb_server.py
+│   └── kg_server.py
+├── scripts/               # hook runner implementations; called via `cartographer hook <name>`
+│   ├── post_tool_use.py
+│   ├── on_stop.py
+│   ├── session_start.py
+│   └── user_prompt_submit.py
+└── skills/
+    ├── archaeology/SKILL.md
+    └── recall/SKILL.md
 ```
 
 ### 6.3 Skills
@@ -201,7 +209,7 @@ cartographer-plugin/
 - **preload** (SessionStart): injects a scoped, budgeted context slice for the current branch and working set.
 - **retrieve** (UserPromptSubmit): injects budgeted top-k relevant knowledge per turn.
 
-Portability: reference scripts via `${CLAUDE_PLUGIN_ROOT}`, read project root via `$CLAUDE_PROJECT_DIR`, persist env from SessionStart via `$CLAUDE_ENV_FILE`.
+Portability: hooks are invoked as `cartographer hook <name>`, so no hardcoded paths are needed. Read project root via `$CLAUDE_PROJECT_DIR`, persist env from SessionStart via `$CLAUDE_ENV_FILE`.
 
 ### 6.5 MCP servers
 
@@ -245,7 +253,8 @@ Generate `docs/DATA_MODEL.md`.
 ### 7.1 VDB
 
 - One logical collection per project, namespaced by scope (local, global).
-- Chunk record: `id` (artifact identity plus chunk ordinal), `project_id`, `scope`, `artifact_type` (code, doc, spec), `path`, `symbol` (nullable), `spec_id` (nullable), `origin` (local or global), `text`, `embedding`, `updated_at`.
+- Chunk record: `id` (artifact identity plus chunk ordinal), `project_id`, `scope`, `artifact_type` (code, spec, doc), `path`, `symbol` (nullable), `spec_id` (nullable), `origin` (local or global), `text`, `embedding`, `updated_at`.
+- `artifact_type: doc` covers any project documentation file ingested via hook or explicit seed. Docs are queried through the same VDB and KG tools as code and specs.
 
 ### 7.2 KG (lightweight)
 
@@ -391,7 +400,7 @@ Repository scaffold (stubs and manifests, no logic):
 ```
 cartographer/
 ├── PROJECT_BRIEF.md              # this brief, copied in for reference
-├── cartographer-plugin/          # the plugin, per Section 6.2
+├── cli/src/cartographer/runtime/ # bundled runtime assets (hooks, MCP servers, skills), per Section 6.2
 ├── cli/                          # real CLI implementation (init, detect, stack add, promote, recall, doctor), per Section 6.1 -- already built, see cli/README.md
 ├── standards/                    # cross-stack baseline plus python and react packs
 ├── standards-webapp/             # NOT part of this deliverable set; placeholder for the Section 6.7 / 5.6 phase

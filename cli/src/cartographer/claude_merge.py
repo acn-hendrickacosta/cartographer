@@ -3,13 +3,6 @@
 Per PROJECT_BRIEF.md Section 6.1 "Setup rules": never clobber. If CLAUDE.md,
 .claude/settings.json, or .mcp.json exist, back them up, then merge additively and
 dedupe MCP entries. Report every change.
-
-`init`'s current additions to settings.json / .mcp.json are empty ({}), because
-those files are where the Cartographer *plugin's* hooks and MCP server entries would
-be registered, and the plugin package is separate, later work (not built in this
-CLI-only slice). The merge machinery here is real and tested; there is just nothing
-to add yet. CLAUDE.md is different: Cartographer owns a pointer to the standards
-baseline today, so that file is always created/updated.
 """
 
 from __future__ import annotations
@@ -83,9 +76,8 @@ def detect(workspace: Path) -> list[DetectionEntry]:
             name=str(SETTINGS_JSON_REL),
             path=settings_json,
             exists=settings_json.exists(),
-            action="unchanged",
-            detail="no Cartographer plugin entries to add yet, so init leaves this file alone "
-            "(plugin not installed)",
+            action="merge" if settings_json.exists() else "create",
+            detail="would merge Cartographer hook entries (PostToolUse, Stop, SessionStart, UserPromptSubmit)",
         )
     )
 
@@ -95,9 +87,8 @@ def detect(workspace: Path) -> list[DetectionEntry]:
             name=MCP_JSON_NAME,
             path=mcp_json,
             exists=mcp_json.exists(),
-            action="unchanged",
-            detail="no Cartographer MCP servers to add yet, so init leaves this file alone "
-            "(plugin not installed)",
+            action="merge" if mcp_json.exists() else "create",
+            detail="would add cartographer-vdb and cartographer-kg MCP server entries",
         )
     )
 
