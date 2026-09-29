@@ -46,11 +46,14 @@ def _optional_bundled_dir(top: str, name: str) -> Path | None:
     return p if p.is_dir() else None
 
 
-def _install_skills_pack(src_dir: Path, skills_root: Path) -> list[Path]:
+def _install_skills_pack(src_dir: Path, skills_root: Path, commands_dir: Path) -> list[Path]:
     """Idempotently install skill files into .claude/skills/<name>/SKILL.md.
 
     Claude Code auto-loads skills from this structure based on each skill's
     description frontmatter, and also exposes them as /<name> slash commands.
+
+    Also removes any stale flat copies from .claude/commands/ left by older
+    versions of Cartographer that used the legacy commands format.
     """
     written: list[Path] = []
     for src_file in sorted(src_dir.glob("*.md")):
@@ -59,10 +62,13 @@ def _install_skills_pack(src_dir: Path, skills_root: Path) -> list[Path]:
         skill_dir.mkdir(parents=True, exist_ok=True)
         dest_file = skill_dir / "SKILL.md"
         content = src_file.read_bytes()
-        if dest_file.exists() and dest_file.read_bytes() == content:
-            continue
-        dest_file.write_bytes(content)
-        written.append(dest_file)
+        if not (dest_file.exists() and dest_file.read_bytes() == content):
+            dest_file.write_bytes(content)
+            written.append(dest_file)
+        # Remove stale legacy copy from .claude/commands/ if present
+        legacy = commands_dir / src_file.name
+        if legacy.exists():
+            legacy.unlink()
     return written
 
 
@@ -106,11 +112,12 @@ def apply_pack(workspace: Path, name: str) -> tuple[list[Path], list[Path], list
 
     # Skills → .claude/skills/<name>/SKILL.md (Claude auto-loads based on description)
     skills_root = workspace / ".claude" / "skills"
+    commands_dir = workspace / ".claude" / "commands"
     skills_written: list[Path] = []
     for pack_name in ("core", name):
         src = _optional_bundled_dir("skills_packs", pack_name)
         if src:
-            skills_written.extend(_install_skills_pack(src, skills_root))
+            skills_written.extend(_install_skills_pack(src, skills_root, commands_dir))
 
     # Agents → .claude/agents/<name>.md (subagent definitions)
     agents_dest = workspace / ".claude" / "agents"

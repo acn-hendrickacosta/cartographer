@@ -195,6 +195,7 @@ def _install_skills(workspace: Path) -> None:
     from cartographer.runtime import SKILLS_DIR
 
     skills_root = workspace / ".claude" / "skills"
+    commands_dir = workspace / ".claude" / "commands"
 
     for skill_dir in SKILLS_DIR.iterdir():
         if not skill_dir.is_dir():
@@ -204,6 +205,10 @@ def _install_skills(workspace: Path) -> None:
             dest_dir = skills_root / skill_dir.name
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(skill_md, dest_dir / "SKILL.md")
+            # Remove stale legacy copy from .claude/commands/ if present
+            legacy = commands_dir / f"{skill_dir.name}.md"
+            if legacy.exists():
+                legacy.unlink()
 
 
 def _ensure_gitignore(workspace: Path) -> None:
