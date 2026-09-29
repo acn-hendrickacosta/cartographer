@@ -46,8 +46,28 @@ def _optional_bundled_dir(top: str, name: str) -> Path | None:
     return p if p.is_dir() else None
 
 
-def _copy_to_agents_dir(src_dir: Path, agents_dest: Path) -> list[Path]:
-    """Idempotently copy all .md files from src_dir into .claude/agents/."""
+def _install_skills_pack(src_dir: Path, skills_root: Path) -> list[Path]:
+    """Idempotently install skill files into .claude/skills/<name>/SKILL.md.
+
+    Claude Code auto-loads skills from this structure based on each skill's
+    description frontmatter, and also exposes them as /<name> slash commands.
+    """
+    written: list[Path] = []
+    for src_file in sorted(src_dir.glob("*.md")):
+        skill_name = src_file.stem
+        skill_dir = skills_root / skill_name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        dest_file = skill_dir / "SKILL.md"
+        content = src_file.read_bytes()
+        if dest_file.exists() and dest_file.read_bytes() == content:
+            continue
+        dest_file.write_bytes(content)
+        written.append(dest_file)
+    return written
+
+
+def _install_agents_pack(src_dir: Path, agents_dest: Path) -> list[Path]:
+    """Idempotently copy agent definition files into .claude/agents/."""
     agents_dest.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for src_file in sorted(src_dir.glob("*.md")):
@@ -60,17 +80,17 @@ def _copy_to_agents_dir(src_dir: Path, agents_dest: Path) -> list[Path]:
     return written
 
 
-def apply_pack(workspace: Path, name: str) -> tuple[list[Path], list[Path]]:
+def apply_pack(workspace: Path, name: str) -> tuple[list[Path], list[Path], list[Path]]:
     """Install a standards pack plus its skills and agents into the workspace.
 
     Copies:
-    - standards  → .claude/standards/<name>/
-    - core skills + agents (always) → .claude/agents/
-    - stack-specific skills + agents → .claude/agents/
+    - standards → .claude/standards/<name>/
+    - core skills + stack skills → .claude/skills/<skill-name>/SKILL.md  (auto-loaded by Claude)
+    - core agents + stack agents → .claude/agents/<agent-name>.md
 
-    Returns (standards_written, agents_written). Idempotent.
+    Returns (standards_written, skills_written, agents_written). Idempotent.
     """
-    # Standards
+    # Standards → .claude/standards/<name>/
     src_dir = _bundled_pack_dir(name)
     dest_dir = workspace / ".claude" / "standards" / name
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -84,17 +104,23 @@ def apply_pack(workspace: Path, name: str) -> tuple[list[Path], list[Path]]:
         dest_file.write_bytes(content)
         standards_written.append(dest_file)
 
-    # Skills and agents → .claude/agents/
+    # Skills → .claude/skills/<name>/SKILL.md (Claude auto-loads based on description)
+    skills_root = workspace / ".claude" / "skills"
+    skills_written: list[Path] = []
+    for pack_name in ("core", name):
+        src = _optional_bundled_dir("skills_packs", pack_name)
+        if src:
+            skills_written.extend(_install_skills_pack(src, skills_root))
+
+    # Agents → .claude/agents/<name>.md (subagent definitions)
     agents_dest = workspace / ".claude" / "agents"
     agents_written: list[Path] = []
+    for pack_name in ("core", name):
+        src = _optional_bundled_dir("agents_packs", pack_name)
+        if src:
+            agents_written.extend(_install_agents_pack(src, agents_dest))
 
-    for top in ("skills_packs", "agents_packs"):
-        for pack_name in ("core", name):
-            src = _optional_bundled_dir(top, pack_name)
-            if src:
-                agents_written.extend(_copy_to_agents_dir(src, agents_dest))
-
-    return standards_written, agents_written
+    return standards_written, skills_written, agents_written
 
 
 @app.command("add")
@@ -103,8 +129,7 @@ def add(
     path: Path = typer.Option(Path("."), "--path", help="Workspace root"),
 ) -> None:
     workspace = path.resolve()
-    standards_written, agents_written = apply_pack(workspace, name)
-    written = standards_written + agents_written
+    standards_written, skills_written, agents_written = apply_pack(workspace, name)
 
     if config_mod.config_exists(workspace):
         cfg = config_mod.load_config(workspace)
@@ -118,8 +143,10 @@ def add(
         )
 
     console.print(
-        f"stack '{name}': {len(standards_written)} standard(s) → .claude/standards/{name}/, "
-        f"{len(agents_written)} skill(s)/agent(s) → .claude/agents/"
+        f"stack '{name}': "
+        f"{len(standards_written)} standard(s) → .claude/standards/{name}/, "
+        f"{len(skills_written)} skill(s) → .claude/skills/, "
+        f"{len(agents_written)} agent(s) → .claude/agents/"
     )
 
     hint = parser_registry.STACK_PARSER_HINTS.get(name)

@@ -186,22 +186,24 @@ def run(
 
 
 def _install_skills(workspace: Path) -> None:
-    """Copy SKILL.md files from the bundled plugin into .claude/commands/.
+    """Copy bundled SKILL.md files into .claude/skills/<name>/SKILL.md.
 
-    Claude Code reads custom slash commands from .claude/commands/<name>.md; the
-    file name becomes the /<name> command. Idempotent: overwrites with the latest version.
+    Claude Code auto-loads skills from this structure based on each skill's
+    description frontmatter, and also exposes them as /<name> slash commands.
+    Idempotent: overwrites with the latest version.
     """
     from cartographer.runtime import SKILLS_DIR
 
-    skills_dest = workspace / ".claude" / "commands"
-    skills_dest.mkdir(parents=True, exist_ok=True)
+    skills_root = workspace / ".claude" / "skills"
 
     for skill_dir in SKILLS_DIR.iterdir():
         if not skill_dir.is_dir():
             continue
         skill_md = skill_dir / "SKILL.md"
         if skill_md.exists():
-            shutil.copy2(skill_md, skills_dest / f"{skill_dir.name}.md")
+            dest_dir = skills_root / skill_dir.name
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(skill_md, dest_dir / "SKILL.md")
 
 
 def _ensure_gitignore(workspace: Path) -> None:
