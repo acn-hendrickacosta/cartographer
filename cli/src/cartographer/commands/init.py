@@ -117,12 +117,12 @@ def run(
     console.print("  skills: archaeology + recall installed")
 
     apply_pack(workspace, "cross-stack")
-    console.print("  standards: cross-stack baseline applied")
+    console.print("  standards + skills + agents: cross-stack baseline applied")
 
     requested_stacks = [s.strip() for s in stacks.split(",") if s.strip()]
     for pack_name in requested_stacks:
         apply_pack(workspace, pack_name)
-        console.print(f"  standards: {pack_name} pack applied")
+        console.print(f"  standards + skills + agents: {pack_name} pack applied")
 
     project_id = compute_project_id(workspace)
     local_dir = workspace / LOCAL_INDEX_REL

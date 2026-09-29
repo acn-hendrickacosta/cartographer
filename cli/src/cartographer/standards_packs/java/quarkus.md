@@ -1,0 +1,14 @@
+# Quarkus Patterns
+
+- Use CDI with `@ApplicationScoped` for singletons (most services and repositories). Prefer `@RequestScoped` for beans that should be fresh per request. Annotate with `@Inject` for field injection in Quarkus, or use Lombok's `@RequiredArgsConstructor` with constructor injection. Avoid `@Singleton` — it skips CDI proxying and causes problems with interceptors.
+- Expose REST endpoints with Jakarta REST annotations (`@Path`, `@GET`, `@POST`, `@Produces`, `@Consumes`). Return `Response` for explicit status control or the domain type directly when Quarkus can infer the status. Use `@RestController` patterns are Spring-specific — use pure Jakarta REST in Quarkus.
+- Apply `@Authenticated` to require a valid JWT. Inject `JsonWebToken` to read claims. Use `@RolesAllowed` for role-based access. For programmatic checks, inject `SecurityIdentity` and call `identity.hasRole("admin")`.
+- Data access: use Panache Repository style (`PanacheRepository<Entity>`) rather than Active Record for complex query scenarios — repositories are easier to mock in tests. Use named queries or Panache's `find("status", status).page(page)` pattern. Always paginate list queries.
+- Use parameterized queries in all Panache `find`/`update`/`delete` calls. Never interpolate user input into query strings.
+- Hash passwords with `BcryptUtil.hash(password)`. Verify with `BcryptUtil.matches(password, hash)`. Never store plaintext passwords or roll custom hashing.
+- Externalize secrets to HashiCorp Vault via the Quarkus Vault extension. Reference them with `@ConfigProperty(name = "my.secret")`. Use `%dev`/`%test`/`%prod` YAML profiles to vary configuration per environment — never hardcode environment-specific values.
+- Implement messaging with Apache Camel. Define routes in `@ApplicationScoped` `RouteBuilder` subclasses. Use `direct:` for synchronous in-process calls and `spring-rabbitmq:` (or `quarkus-smallrye-reactive-messaging`) for asynchronous. Keep routes small and focused on routing logic — delegate business logic to injected services.
+- Cache expensive operations with `@CacheResult(cacheName = "myCache")` on service methods. Invalidate with `@CacheInvalidate`. Use `@CacheKey` on parameters that make up the cache key.
+- Implement health checks by implementing `HealthCheck` and annotating with `@Readiness` and `@Liveness`. Keep probes cheap — avoid database queries in liveness checks.
+- For reactive endpoints returning `Uni<T>` or `Multi<T>`, never block the I/O thread. Wrap blocking database calls with `Uni.createFrom().item(...).runSubscriptionOn(Infrastructure.getDefaultWorkerPool())`.
+- Test with `@QuarkusTest` and REST Assured for HTTP-level integration tests. Use `@TestProfile` to activate a `QuarkusTestProfile` that overrides config (e.g., point to a test database). Test Camel routes with `AdviceWith` to intercept and `MockEndpoint` to assert messages.
