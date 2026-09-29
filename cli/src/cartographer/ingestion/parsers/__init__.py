@@ -16,6 +16,7 @@ Optional parsers (tree-sitter grammars, installed via pip extras):
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from cartographer.ingestion.parsers.base import ParseResult, Parser
@@ -74,3 +75,48 @@ def active_parsers() -> dict[str, str]:
     result = {ext: type(p).__name__ for ext, p in _REGISTRY.items()}
     result["*"] = type(_FALLBACK).__name__
     return result
+
+
+# Which standards-pack stack expects which tree-sitter grammar for full AST
+# parsing (calls/extends edges), keyed by stack name from commands/stack.py's
+# KNOWN_PACKS. Used by `stack add` and `doctor` to nudge installing the right
+# extra instead of silently falling back to regex forever.
+#
+# The package list is duplicated from pyproject.toml's [project.optional-dependencies]
+# rather than read via importlib.metadata: editable installs (`pip install -e .`) bake
+# their dependency metadata in at install time and don't refresh it when pyproject.toml
+# is edited afterward, so metadata.metadata("cartographer") can silently go stale.
+# Keep this in sync with pyproject.toml by hand — it's a short, rarely-changing list.
+STACK_PARSER_HINTS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
+    # stack name -> (import module to probe, pip extra, file types, pip package specs)
+    "react": (
+        "tree_sitter_typescript",
+        "parsers-ts",
+        ".ts/.tsx",
+        ("tree-sitter>=0.23", "tree-sitter-typescript>=0.23"),
+    ),
+}
+
+
+def is_parser_installed(import_name: str) -> bool:
+    try:
+        __import__(import_name)
+        return True
+    except ImportError:
+        return False
+
+
+def _is_pipx_managed() -> bool:
+    """pipx-managed venvs have no `pip` binary — `pip install` fails outright
+    there (confirmed: `ModuleNotFoundError: No module named pip`). `pipx inject`
+    is the only way to add a package to an existing pipx install.
+    """
+    return "pipx" in sys.prefix.lower()
+
+
+def install_hint(extra: str, packages: tuple[str, ...]) -> str:
+    """Return the correct remediation command for however cartographer was installed."""
+    if _is_pipx_managed():
+        pkg_args = " ".join(f'"{p}"' for p in packages)
+        return f"pipx inject cartographer {pkg_args}"
+    return f"pip install 'cartographer\\[{extra}]'"

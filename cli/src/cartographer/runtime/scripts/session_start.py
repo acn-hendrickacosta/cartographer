@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import sys
-from pathlib import Path
+
+from cartographer.runtime.scripts import resolve_workspace
 
 
 def main() -> None:
-    workspace = Path(os.environ.get("CARTO_WORKSPACE", ".")).resolve()
+    workspace = resolve_workspace()
 
     try:
         from cartographer import config as config_mod

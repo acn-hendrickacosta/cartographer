@@ -46,6 +46,37 @@ def _mcp_servers(workspace: Path) -> dict:
     }
 
 
+def _hooks() -> dict:
+    """Wire the four Claude Code hooks that keep the local index current
+    automatically — PostToolUse enqueues changed files, Stop flushes them into
+    the VDB/KG, SessionStart preloads context, UserPromptSubmit retrieves
+    per-turn context. Without this, nothing ever re-ingests edited files; the
+    project's design principle is deterministic hooks, not remembering to run
+    `cartographer seed` by hand.
+
+    No absolute paths needed: `cartographer` is on PATH after install, and
+    Claude Code sets CLAUDE_PROJECT_DIR for every hook invocation, which the
+    runtime scripts read via runtime.scripts.resolve_workspace().
+    """
+    return {
+        "hooks": {
+            "PostToolUse": [{
+                "matcher": "Write|Edit|MultiEdit",
+                "hooks": [{"type": "command", "command": "cartographer hook enqueue"}],
+            }],
+            "Stop": [{
+                "hooks": [{"type": "command", "command": "cartographer hook flush"}],
+            }],
+            "SessionStart": [{
+                "hooks": [{"type": "command", "command": "cartographer hook preload"}],
+            }],
+            "UserPromptSubmit": [{
+                "hooks": [{"type": "command", "command": "cartographer hook retrieve"}],
+            }],
+        }
+    }
+
+
 def run(
     path: Path = typer.Option(Path("."), "--path", help="Workspace root to initialize"),
     stacks: str = typer.Option("", "--stacks", help="Comma-separated stack packs, e.g. python,react"),
@@ -76,7 +107,7 @@ def run(
     _, claude_md_changed = claude_merge.ensure_claude_md(workspace)
     console.print(f"  CLAUDE.md: {'updated' if claude_md_changed else 'already up to date'}")
 
-    _, settings_changed = claude_merge.ensure_settings_json(workspace, {})
+    _, settings_changed = claude_merge.ensure_settings_json(workspace, _hooks())
     console.print(f"  .claude/settings.json: {'updated' if settings_changed else 'already up to date'}")
 
     _, mcp_changed = claude_merge.ensure_mcp_json(workspace, _mcp_servers(workspace))
@@ -125,7 +156,10 @@ def run(
         console.print(f"  {config_mod.LOCAL_CONFIG_FILENAME} already up to date")
 
     if topology == "central":
-        console.print(f"  [yellow]central topology: fill in [central_vdb] and [central_kg] credentials in {config_mod.LOCAL_CONFIG_FILENAME}[/yellow]")
+        console.print(
+            rf"  [yellow]central topology: fill in \[central_vdb] and \[central_kg] "
+            rf"credentials in {config_mod.LOCAL_CONFIG_FILENAME}[/yellow]"
+        )
         try:
             import psycopg2  # noqa: F401
             import neo4j  # noqa: F401
@@ -134,7 +168,7 @@ def run(
                 "  [red]central deps not installed — run:[/red]\n"
                 "  uv pip install \"psycopg2-binary>=2.9\" \"neo4j>=5.0\" \\\n"
                 "    --python \"$(pipx environment --value PIPX_LOCAL_VENVS)/cartographer/bin/python3\" -q\n"
-                "  or: pip install 'cartographer[central]'"
+                r"  or: pip install 'cartographer\[central]'"
             )
 
     _ensure_gitignore(workspace)

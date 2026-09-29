@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
-from pathlib import Path
+
+from cartographer.runtime.scripts import resolve_workspace
 
 
 def main() -> None:
-    workspace = Path(os.environ.get("CARTO_WORKSPACE", ".")).resolve()
+    workspace = resolve_workspace()
 
     raw = sys.stdin.read().strip()
     if not raw:

@@ -39,6 +39,32 @@ def test_deep_merge_settings_concatenates_and_dedupes_lists() -> None:
     assert merged["permissions"]["allow"] == ["Read", "Grep", "Bash"]
 
 
+def test_deep_merge_settings_evicts_stale_cartographer_hook_on_second_merge() -> None:
+    """Regression: the hooks-eviction branch was unreachable once "hooks" already
+    existed as a dict in `merged`, because the generic dict-recursion branch's
+    condition also matched "hooks" and ran first — old Cartographer command
+    strings (e.g. after a version bump) would never get evicted, just piled up
+    alongside the new one. Simulates exactly that: an existing settings.json
+    (as if `init` had already run once) merged with a *different* new command."""
+    existing = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "cartographer hook flush"}]}]}}
+    additions = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "cartographer hook flush-v2"}]}]}}
+
+    merged = claude_merge.deep_merge_settings(existing, additions)
+
+    commands = {h["command"] for group in merged["hooks"]["Stop"] for h in group["hooks"]}
+    assert commands == {"cartographer hook flush-v2"}
+
+
+def test_deep_merge_settings_hooks_preserves_non_cartographer_entries() -> None:
+    existing = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-own-linter"}]}]}}
+    additions = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "cartographer hook flush"}]}]}}
+
+    merged = claude_merge.deep_merge_settings(existing, additions)
+
+    commands = {h["command"] for group in merged["hooks"]["Stop"] for h in group["hooks"]}
+    assert commands == {"my-own-linter", "cartographer hook flush"}
+
+
 def test_merge_mcp_servers_dedupes_by_name() -> None:
     existing = {"mcpServers": {"github": {"command": "gh-mcp"}}}
     additions = {"mcpServers": {"github": {"command": "gh-mcp-v2"}, "cartographer": {"command": "ct-mcp"}}}

@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 
 from cartographer import config as config_mod
+from cartographer.ingestion import parsers as parser_registry
 
 app = typer.Typer(help="Manage standards packs.")
 console = Console()
@@ -66,3 +67,14 @@ def add(
         )
 
     console.print(f"stack '{name}': {len(written)} file(s) written to .claude/standards/{name}/")
+
+    hint = parser_registry.STACK_PARSER_HINTS.get(name)
+    if hint:
+        import_name, extra, filetypes, packages = hint
+        if not parser_registry.is_parser_installed(import_name):
+            cmd = parser_registry.install_hint(extra, packages)
+            console.print(
+                f"[yellow]note[/yellow]: '{name}' parses {filetypes} files with a regex fallback "
+                f"until the real parser is installed (no calls/extends edges in the KG). Install with:\n"
+                f"  {cmd}"
+            )

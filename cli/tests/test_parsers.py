@@ -19,6 +19,13 @@ Exit criteria (all must pass before shipping):
   [G5] graph_extractor stub nodes: cross-file callees get stub nodes
   [G6] graph_extractor no regression: existing doc/spec/spec-ref behavior preserved
   [G7] graph_extractor no duplicate nodes: same symbol ID not emitted twice
+  [T1] TypeScript symbols: functions, arrow-const functions, classes, methods
+  [T2] TypeScript calls: same-file and member-expression (this.x()) call edges
+  [T3] TypeScript imports: relative imports resolved, bare package imports skipped
+  [T4] TypeScript relative imports: ../ segments collapsed to a clean path
+  [T5] TypeScript extends: class and (multi-parent) interface extends edges
+  [T6] TypeScript cross-file calls: callee_module resolved via import map
+  [T7] TypeScript malformed input / JSX: no crash, .tsx parses via TSX grammar
 """
 
 from pathlib import Path
@@ -412,3 +419,124 @@ def test_regression_relative_import_creates_imports_edge():
     result = _extract("src/main.py", code, ArtifactType.CODE)
     edge_types = {e.type for e in result.edges}
     assert "imports" in edge_types
+
+
+# ---------------------------------------------------------------------------
+# [T1-T7] TypeScript parser (tree-sitter-typescript, optional extra)
+# ---------------------------------------------------------------------------
+
+pytest.importorskip("tree_sitter_typescript")
+
+from cartographer.ingestion.parsers.typescript_parser import TypeScriptParser  # noqa: E402
+
+_TS = TypeScriptParser()
+
+
+def ts_parse(text: str, rel_path: str = "src/module.ts"):
+    return _TS.parse(text, Path(rel_path), rel_path)
+
+
+def test_t1_registry_dispatches_ts_and_tsx():
+    active = parser_registry.active_parsers()
+    assert active.get(".ts") == "TypeScriptParser"
+    assert active.get(".tsx") == "TypeScriptParser"
+
+
+def test_t1_function_declaration_symbol():
+    r = ts_parse("export function greet(name: string) {\n  return name;\n}\n")
+    sym = next(s for s in r.symbols if s.name == "greet")
+    assert sym.kind == "function"
+
+
+def test_t1_arrow_const_symbol():
+    r = ts_parse("export const helper = (x: number) => {\n  return x;\n};\n")
+    names = [s.name for s in r.symbols]
+    assert "helper" in names
+
+
+def test_t1_class_and_method_symbols():
+    r = ts_parse("export class Widget {\n  render() {\n    return 1;\n  }\n}\n")
+    syms = {s.name: s for s in r.symbols}
+    assert syms["Widget"].kind == "class"
+    assert syms["render"].kind == "method"
+
+
+def test_t2_call_edge_same_file():
+    code = "function helper() {}\nfunction caller() {\n  helper();\n}\n"
+    r = ts_parse(code)
+    call_pairs = {(c.caller, c.callee) for c in r.calls}
+    assert ("caller", "helper") in call_pairs
+
+
+def test_t2_member_call_attributed_by_property_name():
+    code = "class Widget {\n  run() {\n    this.helper();\n  }\n}\n"
+    r = ts_parse(code)
+    call_pairs = {(c.caller, c.callee) for c in r.calls}
+    assert ("run", "helper") in call_pairs
+
+
+def test_t3_relative_import_resolved():
+    code = 'import { foo } from "./utils/helpers";\n'
+    r = ts_parse(code, "src/app/component.ts")
+    imp = next(i for i in r.imports if "helpers" in i.module)
+    assert imp.module == "src/app/utils/helpers.ts"
+    assert imp.names == ["foo"]
+
+
+def test_t3_aliased_import_uses_local_name():
+    code = 'import { bar as barAlias } from "./utils";\n'
+    r = ts_parse(code, "src/app/component.ts")
+    imp = next(i for i in r.imports if "utils" in i.module)
+    assert imp.names == ["barAlias"]
+
+
+def test_t3_bare_package_import_not_resolved():
+    code = 'import React from "react";\n'
+    r = ts_parse(code)
+    assert r.imports == []
+
+
+def test_t4_dotdot_import_collapses_path():
+    code = 'import { x } from "../shared/ns";\n'
+    r = ts_parse(code, "src/app/component.ts")
+    imp = next(i for i in r.imports)
+    assert imp.module == "src/shared/ns.ts"
+
+
+def test_t5_class_extends_edge():
+    code = "class Base {}\nexport class Derived extends Base {}\n"
+    r = ts_parse(code)
+    ext = next(e for e in r.extends if e.child == "Derived")
+    assert ext.parent == "Base"
+
+
+def test_t5_interface_extends_multiple():
+    code = "interface Thing extends Other, Another {\n  x: number;\n}\n"
+    r = ts_parse(code)
+    parents = {e.parent for e in r.extends if e.child == "Thing"}
+    assert parents == {"Other", "Another"}
+
+
+def test_t6_cross_file_call_resolved_via_import():
+    code = 'import { foo } from "./helpers";\nfunction caller() {\n  foo();\n}\n'
+    r = ts_parse(code, "src/main.ts")
+    call = next(c for c in r.calls if c.callee == "foo")
+    assert call.callee_module == "src/helpers.ts"
+
+
+def test_t7_malformed_input_does_not_raise():
+    r = ts_parse("this is not { valid typescript at all ][")
+    assert r.symbols == []
+
+
+def test_t7_tsx_jsx_parses():
+    code = (
+        'import { useState } from "react";\n'
+        "export function Widget() {\n"
+        "  const [count, setCount] = useState(0);\n"
+        "  return <button onClick={() => setCount(count + 1)}>{count}</button>;\n"
+        "}\n"
+    )
+    r = _TS.parse(code, Path("src/Widget.tsx"), "src/Widget.tsx")
+    assert any(s.name == "Widget" for s in r.symbols)
+    assert any(c.callee == "setCount" for c in r.calls)

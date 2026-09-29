@@ -185,15 +185,22 @@ def deep_merge_settings(existing: dict[str, Any], additions: dict[str, Any]) -> 
     other lists are concatenated and deduped by value; dicts recurse."""
     merged = copy.deepcopy(existing)
     for key, value in additions.items():
-        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
-            merged[key] = deep_merge_settings(merged[key], value)
-        elif key == "hooks" and isinstance(merged.get(key), dict) and isinstance(value, dict):
+        # This must come before the generic dict-recursion branch below: once
+        # "hooks" exists as a dict in `merged` (i.e. every run after the first),
+        # that branch's condition also matches "hooks" and would run a plain
+        # recursive dict-merge instead — the per-event lists would then fall
+        # into the generic list-concat branch on the *recursive* call, silently
+        # skipping the Cartographer-entry eviction below. Order-dependent; this
+        # branch order is load-bearing, not incidental.
+        if key == "hooks" and isinstance(merged.get(key), dict) and isinstance(value, dict):
             # Per-event hook lists: evict stale Cartographer entries before adding new ones
             merged_hooks = copy.deepcopy(merged[key])
             for event, event_hooks in value.items():
                 existing_event = [h for h in merged_hooks.get(event, []) if not _has_cartographer_command(h)]
                 merged_hooks[event] = existing_event + [h for h in event_hooks if h not in existing_event]
             merged[key] = merged_hooks
+        elif key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = deep_merge_settings(merged[key], value)
         elif key in merged and isinstance(merged[key], list) and isinstance(value, list):
             combined = merged[key] + [item for item in value if item not in merged[key]]
             merged[key] = combined

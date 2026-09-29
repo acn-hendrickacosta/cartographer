@@ -10,15 +10,15 @@ Observe-only: does NOT embed or write to VDB/KG — that is the Stop hook's job.
 from __future__ import annotations
 
 import json
-import os
 import sys
-from pathlib import Path
+
+from cartographer.runtime.scripts import resolve_workspace
 
 QUEUE_FILENAME = ".cartographer/local/dirty_queue.json"
 
 
 def main() -> None:
-    workspace = Path(os.environ.get("CARTO_WORKSPACE", ".")).resolve()
+    workspace = resolve_workspace()
     queue_path = workspace / QUEUE_FILENAME
     queue_path.parent.mkdir(parents=True, exist_ok=True)
 

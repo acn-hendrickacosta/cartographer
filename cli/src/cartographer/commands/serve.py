@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import typer
@@ -28,6 +29,12 @@ KG_DEFAULT_PORT = 4011
 def run(
     vdb_port: int = typer.Option(VDB_DEFAULT_PORT, "--vdb-port", help="Port for VDB server"),
     kg_port: int = typer.Option(KG_DEFAULT_PORT, "--kg-port", help="Port for KG server"),
+    watch: bool = typer.Option(
+        True, "--watch/--no-watch",
+        help="Also watch every registered project's files and re-ingest changes automatically. "
+             "Runs independently of Claude Code hooks, so it works even where enterprise policy "
+             "(e.g. allowManagedHooksOnly) blocks project-defined hooks.",
+    ),
 ) -> None:
     vdb_cmd = shutil.which("cartographer-vdb-server") or "cartographer-vdb-server"
     kg_cmd = shutil.which("cartographer-kg-server") or "cartographer-kg-server"
@@ -37,10 +44,19 @@ def run(
         subprocess.Popen([kg_cmd, "--http", "--port", str(kg_port)]),
     ]
 
+    watch_stop = threading.Event()
+    watch_thread: threading.Thread | None = None
+    if watch:
+        from cartographer.runtime.watcher import watch_projects
+        watch_thread = threading.Thread(target=watch_projects, args=(watch_stop,), daemon=True)
+        watch_thread.start()
+
     console.print("[bold green]Cartographer MCP servers running[/bold green]")
     console.print(f"  VDB: [cyan]http://localhost:{vdb_port}/mcp?workspace=<path>[/cyan]")
     console.print(f"  KG:  [cyan]http://localhost:{kg_port}/mcp?workspace=<path>[/cyan]")
     console.print("  Workspace is routed per-request — one server covers all projects.")
+    if watch:
+        console.print("  Watching all registered projects for changes and re-ingesting automatically.")
     console.print("Press [bold]Ctrl+C[/bold] to stop")
 
     try:
@@ -48,6 +64,7 @@ def run(
             p.wait()
     except KeyboardInterrupt:
         console.print("\nShutting down...")
+        watch_stop.set()
         for p in procs:
             p.terminate()
         for p in procs:
@@ -55,3 +72,5 @@ def run(
                 p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 p.kill()
+        if watch_thread is not None:
+            watch_thread.join(timeout=5)

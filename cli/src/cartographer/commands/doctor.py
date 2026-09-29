@@ -10,6 +10,7 @@ from rich.console import Console
 
 from cartographer import config as config_mod
 from cartographer.indexing import kg, vdb
+from cartographer.ingestion import parsers as parser_registry
 
 console = Console()
 
@@ -91,6 +92,20 @@ def run(
         console.print("[green]OK[/green]   Cartographer MCP entries present in .mcp.json")
     else:
         console.print("[yellow]INFO[/yellow] Cartographer MCP entries not found; run 'cartographer init'")
+
+    for stack_name in cfg.stacks.active:
+        hint = parser_registry.STACK_PARSER_HINTS.get(stack_name)
+        if hint is None:
+            continue
+        import_name, extra, filetypes, packages = hint
+        if parser_registry.is_parser_installed(import_name):
+            console.print(f"[green]OK[/green]   '{stack_name}' stack: real {filetypes} parser installed")
+        else:
+            cmd = parser_registry.install_hint(extra, packages)
+            console.print(
+                f"[yellow]INFO[/yellow] '{stack_name}' stack: {filetypes} files use a regex fallback "
+                f"(no calls/extends edges); run: {cmd}"
+            )
 
     if not healthy:
         raise typer.Exit(code=1)

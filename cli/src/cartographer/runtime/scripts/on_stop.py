@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
+
+from cartographer.runtime.scripts import resolve_workspace
 
 MAX_FILES_PER_FLUSH = 20
 QUEUE_FILENAME = ".cartographer/local/dirty_queue.json"
@@ -13,7 +14,7 @@ QUEUE_FILENAME = ".cartographer/local/dirty_queue.json"
 def main() -> None:
     import json
 
-    workspace = Path(os.environ.get("CARTO_WORKSPACE", ".")).resolve()
+    workspace = resolve_workspace()
     queue_path = workspace / QUEUE_FILENAME
 
     if not queue_path.exists():

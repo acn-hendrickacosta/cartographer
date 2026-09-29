@@ -148,37 +148,43 @@ def extract(path: Path) -> ExtractionResult:
     return ExtractionResult(path=path, text=text, artifact_type=artifact_type)
 
 
+_IGNORED_DIRS = {
+    ".git", "__pycache__", "node_modules", ".venv", ".env", ".tox",
+    "dist", "build", "coverage", ".cartographer",
+    # JS/TS framework caches
+    ".angular", ".next", ".nuxt", ".svelte-kit", ".cache", ".parcel-cache",
+    ".turbo", ".nx", "out", ".output",
+}
+
+
+def is_ingestible_path(p: Path) -> bool:
+    """True if a single file path passes the same rules `collect_paths` applies
+    during a full tree walk. Shared so per-event consumers (the filesystem
+    watcher in runtime/watcher.py) don't need to re-walk the whole tree just to
+    decide whether one changed file matters."""
+    if any(part in _IGNORED_DIRS for part in p.parts):
+        return False
+    # Skip files inside hidden directories (e.g. .angular/cache/)
+    if any(part.startswith(".") for part in p.parts[:-1]):
+        return False
+    if p.name.startswith("."):
+        return False
+    suffix = p.suffix.lower()
+    return suffix in _PLAIN_TEXT_EXTENSIONS or suffix in _BINARY_EXTENSIONS
+
+
 def collect_paths(root: Path, recursive: bool = True) -> list[Path]:
     """Return all ingestable file paths under `root`.
 
     Skips hidden directories and common ignore patterns (.git, __pycache__, node_modules, .venv).
     """
-    ignored_dirs = {
-        ".git", "__pycache__", "node_modules", ".venv", ".env", ".tox",
-        "dist", "build", "coverage", ".cartographer",
-        # JS/TS framework caches
-        ".angular", ".next", ".nuxt", ".svelte-kit", ".cache", ".parcel-cache",
-        ".turbo", ".nx", "out", ".output",
-    }
-    paths: list[Path] = []
-
     if root.is_file():
         return [root]
 
+    paths: list[Path] = []
     glob = root.rglob("*") if recursive else root.glob("*")
     for p in glob:
-        if not p.is_file():
-            continue
-        # Skip named artifact directories
-        if any(part in ignored_dirs for part in p.parts):
-            continue
-        # Skip files inside hidden directories (e.g. .angular/cache/)
-        if any(part.startswith(".") for part in p.parts[:-1]):
-            continue
-        if p.name.startswith("."):
-            continue
-        suffix = p.suffix.lower()
-        if suffix in _PLAIN_TEXT_EXTENSIONS or suffix in _BINARY_EXTENSIONS:
+        if p.is_file() and is_ingestible_path(p):
             paths.append(p)
 
     return sorted(paths)

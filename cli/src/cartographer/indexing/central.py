@@ -19,7 +19,7 @@ def get_central_vdb(cfg: CartographerConfig, override: LocalOverrideConfig) -> P
     if not c.password:
         raise ValueError(
             "Central VDB password is not set. "
-            "Add [central_vdb] password to .cartographer.local.toml or set CARTO_VDB_PASSWORD."
+            r"Add \[central_vdb] password to .cartographer.local.toml or set CARTO_VDB_PASSWORD."
         )
     return PgvectorDriver(
         host=c.host,
@@ -38,6 +38,6 @@ def get_central_kg(cfg: CartographerConfig, override: LocalOverrideConfig) -> Ne
     if not c.password:
         raise ValueError(
             "Central KG password is not set. "
-            "Add [central_kg] password to .cartographer.local.toml or set CARTO_KG_PASSWORD."
+            r"Add \[central_kg] password to .cartographer.local.toml or set CARTO_KG_PASSWORD."
         )
     return Neo4jDriver(uri=c.uri, user=c.user, password=c.password)
