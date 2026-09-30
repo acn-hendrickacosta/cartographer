@@ -12,6 +12,7 @@ Both platforms require:
 |---|---|---|
 | Python | 3.10 or later | 3.12 recommended |
 | pip | bundled with Python | used to install Cartographer |
+| Git | any recent version | required to clone the repository |
 | Node.js | 18 or later | required to install Claude Code |
 | Claude Code | latest | the CLI this tool extends |
 
@@ -92,10 +93,12 @@ source ~/.zshrc
 
 ### 4. Install Cartographer
 
+Cartographer is not yet published to PyPI. Install it directly from the GitHub repository.
+
 **Option A — global install (simplest):**
 
 ```bash
-pip3 install "cartographer-cli[embed]"
+pip3 install "git+https://github.com/acn-hendrickacosta/cartographer.git#subdirectory=cli[embed]"
 ```
 
 **Option B — inside a virtual environment (recommended for project isolation):**
@@ -103,7 +106,17 @@ pip3 install "cartographer-cli[embed]"
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "cartographer-cli[embed]"
+pip install "git+https://github.com/acn-hendrickacosta/cartographer.git#subdirectory=cli[embed]"
+```
+
+**Option C — editable install from a local clone (for contributors):**
+
+```bash
+git clone https://github.com/acn-hendrickacosta/cartographer.git
+cd cartographer/cli
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[embed]"
 ```
 
 The `[embed]` extra installs `fastembed`, which downloads a ~90 MB embedding model on first use. This only happens once and is cached in your home directory.
@@ -220,10 +233,12 @@ If `claude` is not recognized, close and reopen PowerShell — npm updates the P
 
 ### 5. Install Cartographer
 
+Cartographer is not yet published to PyPI. Install it directly from the GitHub repository.
+
 **Option A — global install (simplest):**
 
 ```powershell
-pip install "cartographer-cli[embed]"
+pip install "git+https://github.com/acn-hendrickacosta/cartographer.git#subdirectory=cli[embed]"
 ```
 
 **Option B — inside a virtual environment (recommended):**
@@ -231,7 +246,7 @@ pip install "cartographer-cli[embed]"
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install "cartographer-cli[embed]"
+pip install "git+https://github.com/acn-hendrickacosta/cartographer.git#subdirectory=cli[embed]"
 ```
 
 If PowerShell blocks script execution, run this once in an Administrator PowerShell:
@@ -241,6 +256,16 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
 
 Then re-run the activate command.
+
+**Option C — editable install from a local clone (for contributors):**
+
+```powershell
+git clone https://github.com/acn-hendrickacosta/cartographer.git
+cd cartographer\cli
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[embed]"
+```
 
 The `[embed]` extra installs `fastembed`, which downloads a ~90 MB embedding model on first use. This only happens once.
 

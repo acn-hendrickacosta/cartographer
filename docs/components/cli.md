@@ -23,18 +23,24 @@ The plugin owns reusable runtime capability (skills, hooks, MCP servers). The CL
 
 ## 2. Installation
 
-```
-pip install cartographer-cli
-
-# or directly from the repo
-pip install "git+https://github.com/<org>/cartographer#subdirectory=cli"
-```
-
-Requires Python 3.11 or later. The local VDB (LanceDB) and KG (Kuzu) drivers are installed as dependencies. The fastembed driver is an optional dependency installed with:
+Cartographer is not published to PyPI. Install directly from the repository:
 
 ```
-pip install "cartographer-cli[embed]"
+pip install "git+https://github.com/acn-hendrickacosta/cartographer.git#subdirectory=cli"
+
+# with the fastembed embedding driver
+pip install "git+https://github.com/acn-hendrickacosta/cartographer.git#subdirectory=cli[embed]"
 ```
+
+For local development (editable install):
+
+```
+git clone https://github.com/acn-hendrickacosta/cartographer.git
+cd cartographer/cli
+pip install -e ".[embed]"
+```
+
+Requires Python 3.11 or later. The local VDB (LanceDB) and KG (Kuzu) drivers are installed as dependencies. The `[embed]` extra adds the fastembed driver.
 
 ---
 

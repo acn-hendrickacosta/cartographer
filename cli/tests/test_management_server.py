@@ -1,8 +1,11 @@
-"""Tests for Phase 3.1.1: ingest delegation via the KG server's HTTP routes.
+"""Tests for Phase 3.1.1 / 3.1.2: read/write delegation via the KG server's
+HTTP routes.
 
 Covers:
   - GET  /health          on the KG server's Starlette app
   - POST /api/ingest      success path and unknown-workspace 422
+  - POST /api/query       success path, missing field, unknown workspace 422
+  - POST /api/neighbors   success path, missing field
   - `cartographer seed`   delegates when serve is reachable, falls back to the
                           direct ingestion path when it is not
 
@@ -130,6 +133,88 @@ def test_ingest_endpoint_unregistered_project_returns_422(tmp_path, monkeypatch)
     })
     assert resp.status_code == 422
     assert "not registered" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/query and POST /api/neighbors (Phase 3.1.2)
+# ---------------------------------------------------------------------------
+
+def _seed_kg_node(tmp_path: Path, monkeypatch) -> str:
+    """Init a project and ingest one file so the KG has a queryable node.
+    Returns the node's artifact id."""
+    _init_project(tmp_path, monkeypatch)
+    monkeypatch.setattr("cartographer.ingestion.embedder.get_embedder", lambda: StubEmbedder())
+
+    doc = tmp_path / "note.md"
+    doc.write_text("# Hello\n\nSome content.", encoding="utf-8")
+
+    app = kg_server._build_http_app(watch=False)
+    client = TestClient(app)
+    resp = client.post("/api/ingest", json={
+        "workspace": str(tmp_path), "paths": [str(doc)], "scope": "local",
+    })
+    assert resp.status_code == 200, resp.text
+
+    from cartographer.indexing import kg as kg_driver
+    rows = kg_driver.query(
+        tmp_path / ".cartographer" / "local" / "kg.kuzu",
+        "MATCH (a:Artifact) RETURN a.id AS id LIMIT 1",
+    )
+    assert rows
+    return rows[0]["id"]
+
+
+def test_query_endpoint_returns_rows(tmp_path, monkeypatch):
+    node_id = _seed_kg_node(tmp_path, monkeypatch)
+
+    app = kg_server._build_http_app(watch=False)
+    client = TestClient(app)
+    resp = client.post("/api/query", json={
+        "workspace": str(tmp_path),
+        "cypher": "MATCH (a:Artifact {id: $id}) RETURN a.id AS id",
+        "params": {"id": node_id},
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"] == [{"id": node_id}]
+
+
+def test_query_endpoint_missing_cypher_returns_422(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    app = kg_server._build_http_app(watch=False)
+    client = TestClient(app)
+    resp = client.post("/api/query", json={"workspace": str(tmp_path)})
+    assert resp.status_code == 422
+
+
+def test_query_endpoint_unknown_workspace_returns_422(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+    app = kg_server._build_http_app(watch=False)
+    client = TestClient(app)
+    resp = client.post("/api/query", json={
+        "workspace": str(tmp_path / "does-not-exist"),
+        "cypher": "MATCH (a:Artifact) RETURN a.id",
+    })
+    assert resp.status_code == 422
+
+
+def test_neighbors_endpoint_returns_rows(tmp_path, monkeypatch):
+    node_id = _seed_kg_node(tmp_path, monkeypatch)
+
+    app = kg_server._build_http_app(watch=False)
+    client = TestClient(app)
+    resp = client.post("/api/neighbors", json={
+        "workspace": str(tmp_path), "node_id": node_id, "depth": 1, "scope": "local",
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["neighbors"] == []  # single node, no edges
+
+
+def test_neighbors_endpoint_missing_node_id_returns_422(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    app = kg_server._build_http_app(watch=False)
+    client = TestClient(app)
+    resp = client.post("/api/neighbors", json={"workspace": str(tmp_path)})
+    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

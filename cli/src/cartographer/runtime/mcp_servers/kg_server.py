@@ -13,16 +13,22 @@ Tools:
   - kg_neighbors : get neighboring nodes of an artifact
   - kg_stats     : node and edge counts
 
-HTTP mode also exposes two plain REST routes (Phase 3.1.1):
-  - GET  /health      : liveness probe used by `cartographer seed` to detect
+HTTP mode also exposes plain REST routes so other CLI commands can delegate
+KG access to this process instead of opening kg.kuzu themselves — once this
+process (running --watch) has done one write, it holds Kuzu's exclusive
+write lock for its entire lifetime, so any other opener (write or read) would
+otherwise be permanently blocked:
+  - GET  /health       : liveness probe used by delegating commands to detect
                         whether a `cartographer serve` instance is running.
-  - POST /api/ingest   : run the ingestion pipeline for a set of paths inside
-                        this process. This process is the designated KG write
-                        owner (it also runs the watcher, --watch), so routing
-                        `cartographer seed` through here instead of opening
-                        the KG directly from a second process avoids Kuzu's
-                        exclusive-lock conflict. See
-                        docs/phases/phase-3.1.1-management-server.md.
+  - POST /api/ingest    : run the ingestion pipeline for a set of paths.
+                        Delegation target for `cartographer seed` (Phase 3.1.1).
+  - POST /api/query     : run a read-only Cypher query.
+  - POST /api/neighbors : get neighboring nodes of an artifact.
+                        Delegation target for `cartographer ui`'s
+                        /api/graph, /api/files, /api/stats routes
+                        (Phase 3.1.2). See
+                        docs/phases/phase-3.1.1-management-server.md and
+                        docs/phases/phase-3.1.2-ui-read-delegation.md.
 """
 
 from __future__ import annotations
@@ -173,6 +179,93 @@ async def _health(request):
     return JSONResponse({"status": "ok", "pid": os.getpid(), "watch": _watch_enabled})
 
 
+def _resolve_kg_path(workspace: str):
+    """Shared workspace → kg_path resolution for the /api/* routes.
+
+    Returns (kg_path, error_response). error_response is None on success.
+    """
+    from starlette.responses import JSONResponse
+
+    if not workspace:
+        return None, JSONResponse({"detail": "workspace is required"}, status_code=422)
+
+    ws = Path(workspace).resolve()
+    from cartographer import config as config_mod
+    if not config_mod.config_exists(ws):
+        return None, JSONResponse({"detail": f"no cartographer.toml found at {ws}"}, status_code=422)
+
+    kg_path = ws / ".cartographer" / "local" / "kg.kuzu"
+    if not kg_path.exists():
+        return None, JSONResponse({"detail": f"no local KG at {kg_path}"}, status_code=422)
+
+    return kg_path, None
+
+
+async def _api_query(request):
+    """Run a read-only Cypher query inside this process — reuses whatever
+    kuzu.Database handle this process already has cached (kg.py's
+    _rw_db_cache / _ro_db_cache), so it never competes for the KG lock with
+    the watcher or with itself. Delegation target for `cartographer ui`'s
+    /api/graph, /api/files, /api/stats routes (Phase 3.1.2)."""
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "invalid JSON body"}, status_code=422)
+
+    cypher = body.get("cypher", "")
+    if not cypher:
+        return JSONResponse({"detail": "cypher is required"}, status_code=422)
+
+    kg_path, error = _resolve_kg_path(body.get("workspace", ""))
+    if error is not None:
+        return error
+
+    from cartographer.indexing import kg as kg_driver
+
+    try:
+        rows = kg_driver.query(kg_path, cypher, body.get("params") or {})
+    except Exception as exc:
+        status = 503 if "lock" in str(exc).lower() else 500
+        return JSONResponse({"detail": str(exc)}, status_code=status)
+
+    return JSONResponse({"results": rows})
+
+
+async def _api_neighbors(request):
+    """Delegation target for `cartographer ui`'s /api/graph route (Phase 3.1.2)."""
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "invalid JSON body"}, status_code=422)
+
+    node_id = body.get("node_id", "")
+    if not node_id:
+        return JSONResponse({"detail": "node_id is required"}, status_code=422)
+
+    kg_path, error = _resolve_kg_path(body.get("workspace", ""))
+    if error is not None:
+        return error
+
+    from cartographer.indexing import kg as kg_driver
+
+    try:
+        rows = kg_driver.neighbors(
+            kg_path,
+            node_id=node_id,
+            depth=min(int(body.get("depth", 1)), 4),
+            scope=body.get("scope"),
+        )
+    except Exception as exc:
+        status = 503 if "lock" in str(exc).lower() else 500
+        return JSONResponse({"detail": str(exc)}, status_code=status)
+
+    return JSONResponse({"neighbors": rows})
+
+
 async def _api_ingest(request):
     from starlette.responses import JSONResponse
 
@@ -267,6 +360,8 @@ def _build_http_app(watch: bool = False):
     app.add_middleware(WorkspaceMiddleware)
     app.add_route("/health", _health, methods=["GET"])
     app.add_route("/api/ingest", _api_ingest, methods=["POST"])
+    app.add_route("/api/query", _api_query, methods=["POST"])
+    app.add_route("/api/neighbors", _api_neighbors, methods=["POST"])
     return app
 
 

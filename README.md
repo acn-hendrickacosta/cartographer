@@ -26,8 +26,10 @@ Three layers:
 
 ### Install the CLI
 
+Cartographer is not yet published to PyPI. Install directly from GitHub:
+
 ```bash
-pip install "cartographer-cli[embed]"
+pip install "git+https://github.com/acn-hendrickacosta/cartographer.git#subdirectory=cli[embed]"
 ```
 
 ### Initialize a project

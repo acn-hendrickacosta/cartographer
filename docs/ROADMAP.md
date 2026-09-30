@@ -107,6 +107,7 @@ All of the following must be demonstrated against a real project, not a syntheti
 |---|---|---|---|
 | 3.1 | [phase-3.1-watcher-local-cleanup.md](phases/phase-3.1-watcher-local-cleanup.md) | Watcher `on_deleted` / `on_moved` — local index real-time cleanup | Phase 2 code complete. No central backend needed. |
 | 3.1.1 | [phase-3.1.1-management-server.md](phases/phase-3.1.1-management-server.md) | Management server — `POST /api/ingest` in serve; `seed` delegates when serve is running | Phase 3.1 complete. |
+| 3.1.2 | [phase-3.1.2-ui-read-delegation.md](phases/phase-3.1.2-ui-read-delegation.md) | `POST /api/query` and `/api/neighbors` in KG server; `cartographer ui` delegates reads when serve is running | Phase 3.1.1 complete. |
 | 3.2 | [phase-3.2-tombstone.md](phases/phase-3.2-tombstone.md) | Tombstone protocol — global index deletion at promote time + `cartographer gc` | Phase 3.1 complete. Central backend required. |
 | 3.3 | [phase-3.3-rename-tracking.md](phases/phase-3.3-rename-tracking.md) | Rename tracking — `supersedes` edges, git rename detection, recall redirect | Phase 3.2 complete. |
 | 3.4 | [phase-3.4-conflict-resolution.md](phases/phase-3.4-conflict-resolution.md) | Conflict resolution — `⚠ CONFLICT` notice in recall context | Phase 3.3 complete (soft dependency). |
