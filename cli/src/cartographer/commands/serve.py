@@ -8,14 +8,19 @@ the workspace is passed per-request via query parameter in the URL:
 
 Each project's .mcp.json (written by `cartographer init`) bakes in its own workspace
 path, so Claude Code routes requests to the right index automatically.
+
+The background filesystem watcher (--watch) runs inside the KG server subprocess,
+not here (Phase 3.1.1). Kuzu allows only one process to hold a KG's write lock at a
+time, so the watcher and the KG MCP tools must share a process to avoid fighting
+over that lock; `cartographer seed` delegates to that same subprocess via its
+POST /api/ingest route when it detects this command is running. See
+docs/phases/phase-3.1.1-management-server.md.
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
-import threading
-from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -39,17 +44,14 @@ def run(
     vdb_cmd = shutil.which("cartographer-vdb-server") or "cartographer-vdb-server"
     kg_cmd = shutil.which("cartographer-kg-server") or "cartographer-kg-server"
 
+    kg_args = [kg_cmd, "--http", "--port", str(kg_port)]
+    if watch:
+        kg_args.append("--watch")
+
     procs = [
         subprocess.Popen([vdb_cmd, "--http", "--port", str(vdb_port)]),
-        subprocess.Popen([kg_cmd, "--http", "--port", str(kg_port)]),
+        subprocess.Popen(kg_args),
     ]
-
-    watch_stop = threading.Event()
-    watch_thread: threading.Thread | None = None
-    if watch:
-        from cartographer.runtime.watcher import watch_projects
-        watch_thread = threading.Thread(target=watch_projects, args=(watch_stop,), daemon=True)
-        watch_thread.start()
 
     console.print("[bold green]Cartographer MCP servers running[/bold green]")
     console.print(f"  VDB: [cyan]http://localhost:{vdb_port}/mcp?workspace=<path>[/cyan]")
@@ -64,7 +66,6 @@ def run(
             p.wait()
     except KeyboardInterrupt:
         console.print("\nShutting down...")
-        watch_stop.set()
         for p in procs:
             p.terminate()
         for p in procs:
@@ -72,5 +73,3 @@ def run(
                 p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 p.kill()
-        if watch_thread is not None:
-            watch_thread.join(timeout=5)

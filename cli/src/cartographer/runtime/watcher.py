@@ -34,6 +34,11 @@ DEBOUNCE_SECONDS = 3.0
 REGISTRY_RESCAN_SECONDS = 10.0
 POLL_INTERVAL_SECONDS = 0.5
 
+# Shared with runtime.mcp_servers.kg_server's POST /api/ingest handler (Phase
+# 3.1.1) so a delegated `cartographer seed` and a watcher flush never call
+# ingest_paths concurrently for the same project's KG.
+INGEST_LOCK = threading.Lock()
+
 
 class DirtyTracker:
     """Thread-safe per-project set of changed and deleted paths with a last-touched clock.
@@ -142,38 +147,39 @@ def _flush_ready(tracker: DirtyTracker, embedder_holder: list) -> None:
 
         local_dir = workspace / ".cartographer" / "local"
 
-        # Process deletions before ingesting so a rename (delete + add) never
-        # leaves both old and new paths in the index at the same time.
-        for path in deleted_paths:
+        with INGEST_LOCK:
+            # Process deletions before ingesting so a rename (delete + add) never
+            # leaves both old and new paths in the index at the same time.
+            for path in deleted_paths:
+                try:
+                    vdb.delete_by_path(local_dir / "vdb.lance", str(path))
+                    kg.delete_by_path(local_dir / "kg.kuzu", str(path))
+                except Exception:
+                    pass
+
+            existing_dirty = [p for p in dirty_paths if p.exists()]
+            if not existing_dirty:
+                continue
+
+            if embedder_holder[0] is None:
+                from cartographer.ingestion.embedder import get_embedder
+                embedder_holder[0] = get_embedder()
+
             try:
-                vdb.delete_by_path(local_dir / "vdb.lance", str(path))
-                kg.delete_by_path(local_dir / "kg.kuzu", str(path))
+                ingest_paths(
+                    existing_dirty,
+                    project_id=cfg.project.id,
+                    workspace_root=workspace,
+                    vdb_path=local_dir / "vdb.lance",
+                    kg_path=local_dir / "kg.kuzu",
+                    scope="local",
+                    embedder=embedder_holder[0],
+                )
             except Exception:
+                # Best-effort background watcher: one project's ingestion failure
+                # must never take down the shared `serve` process other projects
+                # depend on for MCP.
                 pass
-
-        existing_dirty = [p for p in dirty_paths if p.exists()]
-        if not existing_dirty:
-            continue
-
-        if embedder_holder[0] is None:
-            from cartographer.ingestion.embedder import get_embedder
-            embedder_holder[0] = get_embedder()
-
-        try:
-            ingest_paths(
-                existing_dirty,
-                project_id=cfg.project.id,
-                workspace_root=workspace,
-                vdb_path=local_dir / "vdb.lance",
-                kg_path=local_dir / "kg.kuzu",
-                scope="local",
-                embedder=embedder_holder[0],
-            )
-        except Exception:
-            # Best-effort background watcher: one project's ingestion failure
-            # must never take down the shared `serve` process other projects
-            # depend on for MCP.
-            pass
 
 
 def watch_projects(stop_event: threading.Event | None = None) -> None:

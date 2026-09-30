@@ -4,10 +4,19 @@ Accepts a file, a directory, or a glob pattern. Skips binary formats with a warn
 (they require a Claude Code session for extraction). Reports a summary on completion.
 
 Idempotent: the underlying VDB and KG upserts are keyed on artifact identity.
+
+When `cartographer serve` is running, delegates ingestion to its KG server
+(POST /api/ingest, default port 4011) instead of opening the local KG directly.
+That subprocess already holds the KG's write lock via the background watcher
+(Phase 3.1.1); a second writer from this process would collide with it under
+Kuzu's exclusive-lock model. See docs/phases/phase-3.1.1-management-server.md.
 """
 
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import typer
@@ -18,6 +27,39 @@ from cartographer.ingestion import pipeline as ingest_pipeline
 from cartographer.ingestion import text_extractor
 
 console = Console()
+
+KG_SERVER_PORT = 4011
+_HEALTH_TIMEOUT = 0.5
+_INGEST_TIMEOUT = 600
+
+
+def _serve_reachable(port: int) -> bool:
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=_HEALTH_TIMEOUT)
+        return True
+    except Exception:
+        return False
+
+
+def _delegate_to_serve(port: int, workspace: Path, paths: list[Path], enrich: bool) -> dict:
+    payload = json.dumps({
+        "workspace": str(workspace),
+        "paths": [str(p) for p in paths],
+        "scope": "local",
+        "enrich": enrich,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/ingest",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_INGEST_TIMEOUT) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"serve rejected ingest request ({exc.code}): {detail}") from exc
 
 
 def run(
@@ -48,6 +90,43 @@ def run(
 
     console.print(f"[bold]cartographer seed[/bold] {source}")
 
+    if source.is_file():
+        paths = [source]
+    else:
+        paths = text_extractor.collect_paths(source, recursive=recursive)
+
+    if not paths:
+        console.print("[yellow]no ingestable files found[/yellow]")
+        return
+
+    console.print(f"  {len(paths)} file(s) found")
+
+    if _serve_reachable(KG_SERVER_PORT):
+        console.print(f"  [cyan]delegating to cartographer serve (port {KG_SERVER_PORT})…[/cyan]")
+        try:
+            result = _delegate_to_serve(KG_SERVER_PORT, workspace, paths, enrich)
+        except Exception as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+
+        console.print(f"  processed: {result['files_processed']}")
+        if result.get("files_skipped"):
+            console.print(f"  [yellow]skipped: {result['files_skipped']}[/yellow]")
+        if result.get("errors"):
+            console.print(f"  [red]errors: {len(result['errors'])}[/red]")
+            for msg in result["errors"][:5]:
+                console.print(f"    - {msg}")
+        console.print(
+            f"  chunks: {result['chunks_upserted']}  "
+            f"nodes: {result['nodes_upserted']}  edges: {result['edges_upserted']}"
+        )
+
+        if result.get("errors"):
+            raise typer.Exit(code=1)
+
+        console.print("[bold green]seed complete[/bold green]")
+        return
+
     if enrich:
         from cartographer.ingestion.kg_enricher import is_available as claude_available
         if not claude_available():
@@ -62,17 +141,6 @@ def run(
     except ImportError as exc:
         console.print(f"[red]embedder not available: {exc}[/red]")
         raise typer.Exit(code=1)
-
-    if source.is_file():
-        paths = [source]
-    else:
-        paths = text_extractor.collect_paths(source, recursive=recursive)
-
-    if not paths:
-        console.print("[yellow]no ingestable files found[/yellow]")
-        return
-
-    console.print(f"  {len(paths)} file(s) found")
 
     from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 

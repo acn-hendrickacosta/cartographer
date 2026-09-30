@@ -52,35 +52,48 @@ def build_app(workspace: Path) -> FastAPI:
 
     @app.get("/api/graph")
     def graph(node_id: str = Query(...), depth: int = Query(1, ge=1, le=4)):
-        nodes = kg_driver.neighbors(kg_path, node_id=node_id, depth=depth, scope="local")
+        try:
+            nodes = kg_driver.neighbors(kg_path, node_id=node_id, depth=depth, scope="local")
 
-        # Also include the requested node itself
-        root_rows = kg_driver.query(
-            kg_path,
-            "MATCH (a:Artifact {id: $id}) RETURN a.id AS id, a.type AS type, a.path AS path, a.scope AS scope",
-            {"id": node_id},
-        )
-        all_nodes = root_rows + nodes
+            # Also include the requested node itself
+            root_rows = kg_driver.query(
+                kg_path,
+                "MATCH (a:Artifact {id: $id}) RETURN a.id AS id, a.type AS type, a.path AS path, a.scope AS scope",
+                {"id": node_id},
+            )
+            all_nodes = root_rows + nodes
 
-        # Fetch edges between visible nodes
-        visible_ids = {n["id"] for n in all_nodes}
-        id_list = "', '".join(visible_ids)
-        edges = kg_driver.query(
-            kg_path,
-            f"MATCH (a:Artifact)-[r:RelatesTo]->(b:Artifact) "
-            f"WHERE a.id IN ['{id_list}'] AND b.id IN ['{id_list}'] "
-            "RETURN a.id AS src, b.id AS dst, r.type AS type",
-        )
-        return JSONResponse({"nodes": all_nodes, "edges": edges})
+            # Fetch edges between visible nodes
+            visible_ids = {n["id"] for n in all_nodes}
+            id_list = "', '".join(visible_ids)
+            edges = kg_driver.query(
+                kg_path,
+                f"MATCH (a:Artifact)-[r:RelatesTo]->(b:Artifact) "
+                f"WHERE a.id IN ['{id_list}'] AND b.id IN ['{id_list}'] "
+                "RETURN a.id AS src, b.id AS dst, r.type AS type",
+            )
+            return JSONResponse({"nodes": all_nodes, "edges": edges})
+        except RuntimeError as exc:
+            if "lock" in str(exc).lower():
+                raise HTTPException(
+                    status_code=503,
+                    detail="Knowledge graph is temporarily locked by an indexing process. Retry in a moment.",
+                )
+            raise
 
     @app.get("/api/files")
     def files():
-        rows = kg_driver.query(
-            kg_path,
-            "MATCH (a:Artifact) WHERE a.type IN ['module', 'doc', 'spec'] "
-            "RETURN a.id AS id, a.path AS path, a.type AS type ORDER BY a.path",
-        )
-        return JSONResponse({"files": rows})
+        try:
+            rows = kg_driver.query(
+                kg_path,
+                "MATCH (a:Artifact) WHERE a.type IN ['module', 'doc', 'spec'] "
+                "RETURN a.id AS id, a.path AS path, a.type AS type ORDER BY a.path",
+            )
+            return JSONResponse({"files": rows})
+        except RuntimeError as exc:
+            if "lock" in str(exc).lower():
+                raise HTTPException(status_code=503, detail="Knowledge graph is temporarily locked by an indexing process. Retry in a moment.")
+            raise
 
     @app.get("/api/project")
     def project_info():
@@ -108,12 +121,17 @@ def build_app(workspace: Path) -> FastAPI:
                 vdb_counts[atype] = vdb_counts.get(atype, 0) + 1
 
         if kg_path.exists():
-            node_rows = kg_driver.query(
-                kg_path,
-                "MATCH (a:Artifact) RETURN a.type AS type, count(*) AS cnt",
-            )
-            for r in node_rows:
-                kg_counts[r["type"]] = r.get("cnt", 0)
+            try:
+                node_rows = kg_driver.query(
+                    kg_path,
+                    "MATCH (a:Artifact) RETURN a.type AS type, count(*) AS cnt",
+                )
+                for r in node_rows:
+                    kg_counts[r["type"]] = r.get("cnt", 0)
+            except RuntimeError as exc:
+                if "lock" not in str(exc).lower():
+                    raise
+                kg_counts["_error"] = "locked"
 
         return JSONResponse({"vdb": vdb_counts, "kg": kg_counts})
 
