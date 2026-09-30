@@ -100,6 +100,18 @@ Add `last_promoted_sha: str = ""` to `registry.ProjectRecord`. Updated at the en
 
 ---
 
+## Local index rename cleanup (watcher)
+
+This protocol covers rename tracking in the **global** index at promote time. The **local** index is kept accurate in real time by the watcher.
+
+When a file is moved/renamed while `cartographer serve` is running, the watcher's `on_moved` handler:
+1. Calls `vdb.delete_by_path` and `kg.delete_by_path` to remove the old path from the local index immediately
+2. Enqueues the new path for ingestion
+
+No `supersedes` edge is written to the local index — that relationship only makes sense in the global index where multiple developers share state. In the local index, the old path simply disappears and the new path appears as a fresh artifact.
+
+---
+
 ## Data model changes required
 
 | Component | Change |
@@ -107,6 +119,7 @@ Add `last_promoted_sha: str = ""` to `registry.ProjectRecord`. Updated at the en
 | `registry.ProjectRecord` | Add `last_promoted_sha: str = ""` |
 | `promote.py` | Add git rename detection; write `supersedes` edges; update `last_promoted_sha` |
 | `kg.py` / `kg_neo4j.py` | No schema change — `supersedes` is a standard `RelatesTo` edge with `type='supersedes'` |
+| `watcher.py` | Enhance `on_moved` to remove `src_path` from local index via `vdb.delete_by_path` / `kg.delete_by_path` |
 | Recall hooks | Follow `supersedes` edges for tombstoned results; tag with `origin: renamed` |
 
 ---
@@ -127,5 +140,6 @@ Add `last_promoted_sha: str = ""` to `registry.ProjectRecord`. Updated at the en
 
 | # | Criterion |
 |---|---|
-| 2 | Renaming a file and promoting links old identity to new identity via `supersedes` edge |
-| 4 | Recall follows `supersedes` redirect; does not return tombstoned old path |
+| 1 | Renaming a file while `cartographer serve` is running removes the old path from local index and ingests the new path within the debounce window |
+| 2 | Renaming a file on a branch and promoting links old identity to new identity via `supersedes` edge in the global KG |
+| 3 | Recall follows `supersedes` redirect for renamed artifacts; does not return tombstoned old path |

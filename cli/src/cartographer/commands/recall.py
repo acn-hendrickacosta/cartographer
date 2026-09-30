@@ -63,7 +63,28 @@ def run(
 
     embedder = TextEmbedding()
     embedding = list(next(embedder.embed([query])))
-    vdb_hits = vdb.query(local_dir / "vdb.lance", scope="local", embedding=embedding, k=k)
-    console.print(f"VDB matches (origin=local): {len(vdb_hits)}")
-    for hit in vdb_hits:
-        console.print(f"  - {hit['path']} :: {hit['text'][:80]}")
+    local_hits = vdb.query(local_dir / "vdb.lance", scope="local", embedding=embedding, k=k)
+
+    global_hits: list[dict] = []
+    if cfg.topology.mode == "central":
+        try:
+            from cartographer.indexing.central import get_central_vdb
+            override = config_mod.load_local_override(workspace)
+            central_vdb = get_central_vdb(cfg, override)
+            if central_vdb.is_reachable():
+                global_hits = central_vdb.query(cfg.project.id, embedding=embedding, k=k)
+                for h in global_hits:
+                    h["origin"] = "global"
+            else:
+                console.print("[yellow]central index unreachable — showing local results only[/yellow]")
+        except Exception:
+            console.print("[yellow]central index unavailable — showing local results only[/yellow]")
+
+    local_paths = {h.get("path") for h in local_hits}
+    merged = list(local_hits) + [h for h in global_hits if h.get("path") not in local_paths]
+
+    console.print(f"VDB matches: {len(merged)}")
+    for hit in merged:
+        origin = hit.get("origin", "local")
+        artifact_type = hit.get("artifact_type", "code")
+        console.print(f"  - [{artifact_type}|{origin}] {hit['path']} :: {hit['text'][:80]}", markup=False)

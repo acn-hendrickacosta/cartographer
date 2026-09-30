@@ -1,0 +1,35 @@
+# Cartographer project config. Commit this file; see cartographer.local.toml for secrets.
+
+[project]
+id = "proj_d1968daff2170cfe"
+name = "specbrain"
+
+[topology]
+mode = "local"
+
+[stacks]
+active = ["cross-stack", "python"]
+
+[promotion]
+trigger = "manual"
+
+[isolation]
+tenant = "default"
+
+[retrieval]
+preload_tokens = 2000
+per_turn_tokens = 1000
+top_k = 8
+
+[backends.vdb]
+driver = "lancedb"
+
+[backends.kg]
+driver = "kuzu"
+
+[backends.embedder]
+driver = "local"
+
+[central]
+vdb_driver = "pgvector"
+kg_driver = "neo4j"

@@ -38,12 +38,15 @@ The user says something like:
    - For each target project, open its local VDB at `<project_location>/.cartographer/local/vdb.lance`.
    - Run a VDB query with the embedded query, k=8.
    - Also run a KG path query for nodes matching the query terms.
-   - Tag each result with the origin project name and id.
+   - If the target project has `topology.mode = "central"`, also query the central (global) scope:
+     - Query the central VDB for the same embedding.
+     - Merge local and global results: local shadows global for the same artifact path.
+     - Tag each result with its origin: `local` or `global`.
+   - Tag each result with the origin project name, id, and scope origin.
 
 6. **Merge and rank results**
-   - Merge results across projects.
-   - Sort by score (VDB distance) descending.
-   - De-duplicate: if the same chunk appears in multiple results, keep the highest-scored occurrence.
+   - Merge results across projects, keeping local-first order within each project.
+   - De-duplicate by artifact path: local always shadows global for the same path, regardless of score.
 
 7. **Apply token budget**
    - Respect the `retrieval.per_turn_tokens` budget from the current project config (default 1000 tokens ≈ 4000 chars).

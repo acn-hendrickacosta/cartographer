@@ -715,6 +715,7 @@ Each agent is a specialist subagent with its own system prompt, tool list, and o
 
 | Document | What it covers |
 |---|---|
+| [docs/INSTALLATION.md](docs/INSTALLATION.md) | Step-by-step installation for macOS and Windows |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System layers, topologies, AWS reference deployment |
 | [docs/APPLICATION_ARCHITECTURE.md](docs/APPLICATION_ARCHITECTURE.md) | CLI command flows, web app screen flows, hook runtime flows |
 | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | VDB, KG, and registry schemas; artifact identity; promotion mechanics |

@@ -114,7 +114,7 @@ def run(
     console.print(f"  .mcp.json: {'updated' if mcp_changed else 'already up to date'}")
 
     _install_skills(workspace)
-    console.print("  skills: archaeology + recall installed")
+    console.print("  skills: archaeology installed (project); recall installed (project + ~/.claude global)")
 
     apply_pack(workspace, "cross-stack")
     console.print("  standards + skills + agents: cross-stack baseline applied")
@@ -191,6 +191,14 @@ def _install_skills(workspace: Path) -> None:
     Claude Code auto-loads skills from this structure based on each skill's
     description frontmatter, and also exposes them as /<name> slash commands.
     Idempotent: overwrites with the latest version.
+
+    recall is also installed to ~/.claude/skills/recall/SKILL.md (user-level)
+    so it is available in every Claude Code session on this machine, not just
+    in Cartographer-initialized projects. Cross-project recall only makes sense
+    as a global skill — the whole point is to query from any project context.
+
+    archaeology stays project-level only: it bootstraps a specific project's
+    index and has no meaningful use outside an initialized workspace.
     """
     from cartographer.runtime import SKILLS_DIR
 
@@ -209,6 +217,13 @@ def _install_skills(workspace: Path) -> None:
             legacy = commands_dir / f"{skill_dir.name}.md"
             if legacy.exists():
                 legacy.unlink()
+
+    # Install recall globally so it works from any project on this machine
+    recall_src = SKILLS_DIR / "recall" / "SKILL.md"
+    if recall_src.exists():
+        global_recall_dir = Path.home() / ".claude" / "skills" / "recall"
+        global_recall_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(recall_src, global_recall_dir / "SKILL.md")
 
 
 def _ensure_gitignore(workspace: Path) -> None:

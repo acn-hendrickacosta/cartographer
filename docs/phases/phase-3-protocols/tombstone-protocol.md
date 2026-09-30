@@ -118,14 +118,35 @@ Removes tombstoned artifacts that have been tombstoned for longer than the reten
 
 ---
 
+## Local index deletion (watcher)
+
+The tombstone protocol covers the **global** index at promote time. The **local** index is kept accurate in real time by the watcher (`cli/src/cartographer/runtime/watcher.py`).
+
+When a file is deleted or renamed while `cartographer serve` is running, the watcher's `on_deleted` / `on_moved` handler calls `vdb.delete_by_path` and `kg.delete_by_path` to remove the stale local entries immediately (within the debounce window). This means:
+
+- Local recall context is accurate as soon as files are deleted — no waiting for promote or re-seed
+- The tombstone detection at promote time (`global_paths - local_paths`) works on an already-clean local index
+
+**New driver operations required:**
+- `vdb.delete_by_path(db_path, path)` — delete all chunks for a given path from local LanceDB
+- `kg.delete_by_path(kg_path, path)` — detach-delete all nodes for a given path from local Kuzu
+
+These are local-only operations; they do not write tombstones (tombstones are global-only).
+
+---
+
 ## Data model changes required
 
 | Component | Change |
 |---|---|
 | `vdb.ChunkRecord` | Add `is_tombstone: bool = False` field |
+| `vdb.py:_schema()` | Add `is_tombstone` column to LanceDB Arrow schema |
 | `vdb_pgvector.PgvectorDriver` | Add `is_tombstone` column; update `ensure_collection`, `upsert`, `query` |
+| `vdb.py` | Add `delete_by_path(db_path, path)` function (local LanceDB) |
+| `kg.py` | Add `delete_by_path(kg_path, path)` function (local Kuzu) |
 | `kg.Node` (attrs) | Document `tombstoned_at` as a reserved attr key |
 | `promote.py` | Add deletion detection + tombstone writing |
+| `watcher.py` | Add `on_deleted` handler; enhance `on_moved` to remove src path; add `DirtyTracker.mark_deleted` |
 | `commands/gc.py` | New command |
 | `vdb_server.py` / `kg_server.py` | Filter tombstoned in all query results |
 | `registry.ProjectRecord` | No change needed (detection uses index comparison, not commit SHA) |
@@ -148,6 +169,7 @@ Removes tombstoned artifacts that have been tombstoned for longer than the reten
 
 | # | Criterion |
 |---|---|
-| 1 | Deleting a file on a branch and promoting does not leave the artifact permanently in global index — it is tombstoned |
+| 1 | Deleting a file while `cartographer serve` is running removes it from the local index within the debounce window |
+| 2 | Deleting a file on a branch and promoting does not leave the artifact permanently in global index — it is tombstoned |
 | 3 | `cartographer gc` removes tombstoned artifacts beyond the retention period |
-| 4 | Recall does not surface tombstoned artifacts in context |
+| 4 | Recall does not surface tombstoned artifacts in context (local or global) |

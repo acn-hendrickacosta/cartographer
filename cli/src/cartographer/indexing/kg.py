@@ -140,6 +140,14 @@ def neighbors(db_path: Path, node_id: str, depth: int = 1, scope: str | None = N
     return query(db_path, cypher, {"id": node_id})
 
 
+def delete_by_path(kg_path: Path, path: str) -> None:
+    """Detach-delete all Artifact nodes for the given path from the local KG."""
+    if not kg_path.exists():
+        return
+    conn = _connect(kg_path)
+    conn.execute("MATCH (a:Artifact) WHERE a.path = $path DETACH DELETE a", {"path": path})
+
+
 def is_readable(db_path: Path) -> bool:
     """doctor helper: confirm the database directory opens without error."""
     try:

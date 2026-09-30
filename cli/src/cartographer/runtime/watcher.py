@@ -36,16 +36,21 @@ POLL_INTERVAL_SECONDS = 0.5
 
 
 class DirtyTracker:
-    """Thread-safe per-project set of changed paths with a last-touched clock.
+    """Thread-safe per-project set of changed and deleted paths with a last-touched clock.
 
     Debouncing (rather than ingesting on every single event) matters because
     editors commonly fire several write events per save, and a large find-and-
     replace or `git checkout` can touch hundreds of files within milliseconds.
+
+    Deleted paths are tracked separately from dirty paths so _flush_ready can
+    call delete_by_path before ingesting new content — critical for renames,
+    where the old path must be removed before the new path is ingested.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._dirty: dict[str, set[Path]] = {}
+        self._deleted: dict[str, set[Path]] = {}
         self._last_touch: dict[str, float] = {}
 
     def mark(self, project_id: str, path: Path) -> None:
@@ -53,16 +58,24 @@ class DirtyTracker:
             self._dirty.setdefault(project_id, set()).add(path)
             self._last_touch[project_id] = time.monotonic()
 
-    def ready_batches(self, debounce: float) -> list[tuple[str, set[Path]]]:
-        """Pop and return (project_id, paths) for every project that has been
-        idle for at least `debounce` seconds since its last change."""
-        now = time.monotonic()
-        ready: list[tuple[str, set[Path]]] = []
+    def mark_deleted(self, project_id: str, path: Path) -> None:
         with self._lock:
-            for project_id in list(self._dirty.keys()):
+            self._deleted.setdefault(project_id, set()).add(path)
+            self._last_touch[project_id] = time.monotonic()
+
+    def ready_batches(self, debounce: float) -> list[tuple[str, set[Path], set[Path]]]:
+        """Pop and return (project_id, dirty_paths, deleted_paths) for every project
+        that has been idle for at least `debounce` seconds since its last change."""
+        now = time.monotonic()
+        ready: list[tuple[str, set[Path], set[Path]]] = []
+        with self._lock:
+            all_projects = set(self._dirty) | set(self._deleted)
+            for project_id in list(all_projects):
                 if now - self._last_touch.get(project_id, 0.0) >= debounce:
-                    ready.append((project_id, self._dirty.pop(project_id)))
+                    dirty = self._dirty.pop(project_id, set())
+                    deleted = self._deleted.pop(project_id, set())
                     self._last_touch.pop(project_id, None)
+                    ready.append((project_id, dirty, deleted))
         return ready
 
 
@@ -84,8 +97,13 @@ class _ProjectHandler(FileSystemEventHandler):
         if not event.is_directory:
             self._consider(event.src_path)
 
+    def on_deleted(self, event: FileSystemEvent) -> None:
+        if not event.is_directory:
+            self._tracker.mark_deleted(self._project_id, Path(event.src_path))
+
     def on_moved(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
+            self._tracker.mark_deleted(self._project_id, Path(event.src_path))
             self._consider(event.dest_path)
 
 
@@ -110,27 +128,40 @@ def _sync_watches(observer: Observer, tracker: DirtyTracker, watched: dict[str, 
 
 
 def _flush_ready(tracker: DirtyTracker, embedder_holder: list) -> None:
-    for project_id, paths in tracker.ready_batches(DEBOUNCE_SECONDS):
+    from cartographer.indexing import vdb, kg
+
+    for project_id, dirty_paths, deleted_paths in tracker.ready_batches(DEBOUNCE_SECONDS):
         record = registry.get_project(project_id)
         if record is None:
             continue
         workspace = Path(record.location)
-        existing_paths = [p for p in paths if p.exists()]
-        if not existing_paths:
-            continue
         try:
             cfg = config_mod.load_config(workspace)
         except Exception:
+            continue
+
+        local_dir = workspace / ".cartographer" / "local"
+
+        # Process deletions before ingesting so a rename (delete + add) never
+        # leaves both old and new paths in the index at the same time.
+        for path in deleted_paths:
+            try:
+                vdb.delete_by_path(local_dir / "vdb.lance", str(path))
+                kg.delete_by_path(local_dir / "kg.kuzu", str(path))
+            except Exception:
+                pass
+
+        existing_dirty = [p for p in dirty_paths if p.exists()]
+        if not existing_dirty:
             continue
 
         if embedder_holder[0] is None:
             from cartographer.ingestion.embedder import get_embedder
             embedder_holder[0] = get_embedder()
 
-        local_dir = workspace / ".cartographer" / "local"
         try:
             ingest_paths(
-                existing_paths,
+                existing_dirty,
                 project_id=cfg.project.id,
                 workspace_root=workspace,
                 vdb_path=local_dir / "vdb.lance",

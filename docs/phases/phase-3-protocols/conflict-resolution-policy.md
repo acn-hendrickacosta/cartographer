@@ -16,7 +16,7 @@ A more acute case: Developer B promotes a version, then Developer A promotes a d
 
 ## Definition of a conflict
 
-A conflict exists when, at recall time, **both** of the following are true:
+A conflict exists when, at recall time, **all** of the following are true:
 
 1. The artifact has a local version (present in local VDB/KG)
 2. The artifact has a global version (present in global VDB/KG)

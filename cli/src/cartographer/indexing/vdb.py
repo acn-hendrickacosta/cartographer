@@ -124,6 +124,19 @@ def delete(db_path: Path, scope: str, ids: list[str]) -> None:
     table.delete(f"id IN ({quoted})")
 
 
+def delete_by_path(db_path: Path, path: str) -> None:
+    """Delete all chunks for the given file path from every scope in the local VDB."""
+    if not db_path.exists():
+        return
+    db = _connect(db_path)
+    escaped = path.replace("'", "''")
+    for table_name in _table_names(db):
+        try:
+            db.open_table(table_name).delete(f"path = '{escaped}'")
+        except Exception:
+            pass
+
+
 def is_readable(db_path: Path) -> bool:
     """doctor helper: confirm the database directory opens without error."""
     try:

@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 .venv/
+cartographer.local.toml
+.cartographer/local/
+.mcp.json
+.claude/settings.json

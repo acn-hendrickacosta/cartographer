@@ -60,6 +60,8 @@ All of the following must be demonstrated against a real project, not a syntheti
 
 ## Phase 2: Configurable central
 
+**Status:** Code complete as of 2026-09-29. Exit criteria walkthrough pending — requires a provisioned central backend (pgvector + Neo4j) and two developer machines. Do not mark this phase closed until the two-developer walkthrough in `docs/runbooks/two-developer-walkthrough.md` is completed and all 10 exit criteria are recorded.
+
 **Goal:** A second developer joins a project. After a branch merges, they see the first developer's merged knowledge in their session, through the global index.
 
 ### Scope
@@ -95,24 +97,26 @@ All of the following must be demonstrated against a real project, not a syntheti
 
 ## Phase 3: Sync and lifecycle
 
-**Goal:** Handle the gaps that were deferred in Phase 2 -- deletions, renames, rebases, and conflict resolution when local and global indexes diverge.
+**Goal:** Handle the gaps that were deferred in Phase 2 — deletions, renames, rebases, and conflict resolution when local and global indexes diverge.
 
-### Scope (design spike first, implementation second)
+**Design spike status:** Complete. All four protocol documents are written in `docs/phases/phase-3-protocols/`. Implementation is broken into four sequential passes.
 
-| Concern | What is needed |
-|---|---|
-| Deletion across the promotion boundary | Tombstone protocol: deleted artifacts are marked in global index, not left as stale nodes |
-| Rename handling | Rename tracking: old identity redirects to new identity in global index |
-| Rebase and force-push | Policy decision: does a force-push that removes commits remove their artifacts from global? |
-| Conflict resolution | Policy: when local and global disagree on the same artifact, what wins and when? |
+### Sub-phases
+
+| Pass | Document | Scope | Entry condition |
+|---|---|---|---|
+| 3.1 | [phase-3.1-watcher-local-cleanup.md](phases/phase-3.1-watcher-local-cleanup.md) | Watcher `on_deleted` / `on_moved` — local index real-time cleanup | Phase 2 code complete. No central backend needed. |
+| 3.2 | [phase-3.2-tombstone.md](phases/phase-3.2-tombstone.md) | Tombstone protocol — global index deletion at promote time + `cartographer gc` | Phase 3.1 complete. Central backend required. |
+| 3.3 | [phase-3.3-rename-tracking.md](phases/phase-3.3-rename-tracking.md) | Rename tracking — `supersedes` edges, git rename detection, recall redirect | Phase 3.2 complete. |
+| 3.4 | [phase-3.4-conflict-resolution.md](phases/phase-3.4-conflict-resolution.md) | Conflict resolution — `⚠ CONFLICT` notice in recall context | Phase 3.3 complete (soft dependency). |
 
 ### Entry condition
 
-Phase 3 does not start until Phase 2 is stable in production use. The design spike may run in parallel with Phase 2 stabilization.
+Phase 3 does not start until Phase 2 is stable in production use.
 
 ### Exit criteria
 
-To be defined after the design spike. The spike must produce a written conflict resolution policy and tombstone protocol before implementation begins.
+See each sub-phase document for detailed criteria. Phase 3 is complete when all four sub-phases pass and the Phase 2 two-developer walkthrough passes without regression.
 
 ---
 
