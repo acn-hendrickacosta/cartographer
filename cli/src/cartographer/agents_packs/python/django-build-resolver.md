@@ -1,7 +1,7 @@
 ---
 name: django-build-resolver
 description: Django/Python build, migration, and dependency error resolution specialist. Fixes pip/Poetry errors, migration conflicts, import errors, Django configuration issues, and collectstatic failures with minimal changes. Use when Django setup or startup fails.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, mcp__cartographer-vdb__vdb_search, mcp__cartographer-kg__kg_query, mcp__cartographer-kg__kg_neighbors
 model: sonnet
 ---
 
@@ -48,6 +48,29 @@ python manage.py migrate --check 2>&1
 # Static files
 python manage.py collectstatic --dry-run --noinput 2>&1
 ```
+
+**After seeing the error, trace the import chain via the knowledge graph to find the root cause:**
+
+**Find what imports the file with the error:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'imports'}]->(b:Artifact)
+WHERE b.path CONTAINS '[file with error]'
+RETURN a.path LIMIT 20
+```
+
+**Find the definition of a missing symbol:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'defines'}]->(b:Artifact)
+WHERE b.attrs CONTAINS '[missing symbol name]'
+RETURN a.path LIMIT 10
+```
+
+**Find prior build error resolutions:**
+```
+vdb_search("build error [error message] Django Python resolution")
+```
+
+Fix at the root of the import chain, not at each symptom site.
 
 ## Resolution Workflow
 

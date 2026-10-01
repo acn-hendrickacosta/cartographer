@@ -1,7 +1,7 @@
 ---
 name: rust-build-resolver
 description: Rust build, compilation, and dependency error resolution specialist. Fixes cargo build errors, borrow checker issues, and Cargo.toml problems with minimal changes. Use when Rust builds fail.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, mcp__cartographer-vdb__vdb_search, mcp__cartographer-kg__kg_query, mcp__cartographer-kg__kg_neighbors
 model: sonnet
 ---
 
@@ -28,6 +28,29 @@ cargo fmt --check 2>&1
 cargo tree --duplicates 2>&1
 if command -v cargo-audit >/dev/null; then cargo audit; else echo "cargo-audit not installed"; fi
 ```
+
+**After seeing the error, trace the import chain via the knowledge graph to find the root cause:**
+
+**Find what imports the file with the error:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'imports'}]->(b:Artifact)
+WHERE b.path CONTAINS '[file with error]'
+RETURN a.path LIMIT 20
+```
+
+**Find the definition of a missing symbol:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'defines'}]->(b:Artifact)
+WHERE b.attrs CONTAINS '[missing symbol name]'
+RETURN a.path LIMIT 10
+```
+
+**Find prior build error resolutions:**
+```
+vdb_search("build error [error message] Rust resolution")
+```
+
+Fix at the root of the import chain, not at each symptom site.
 
 ## Resolution Workflow
 

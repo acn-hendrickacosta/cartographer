@@ -1,7 +1,7 @@
 ---
 name: swift-build-resolver
 description: Swift/Xcode build, compilation, and dependency error resolution specialist. Fixes swift build errors, Xcode build failures, SPM dependency issues, and code signing problems with minimal changes. Use when Swift builds fail.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, mcp__cartographer-vdb__vdb_search, mcp__cartographer-kg__kg_query, mcp__cartographer-kg__kg_neighbors
 model: sonnet
 ---
 
@@ -37,6 +37,29 @@ xcrun simctl list devices available 2>&1 | head -20   # find an available simula
 xcodebuild -scheme <Scheme> -destination 'generic/platform=iOS Simulator' build 2>&1 | tail -50
 xcodebuild -showBuildSettings 2>&1 | grep -E 'SWIFT_VERSION|CODE_SIGN|PRODUCT_BUNDLE_IDENTIFIER'
 ```
+
+**After seeing the error, trace the import chain via the knowledge graph to find the root cause:**
+
+**Find what imports the file with the error:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'imports'}]->(b:Artifact)
+WHERE b.path CONTAINS '[file with error]'
+RETURN a.path LIMIT 20
+```
+
+**Find the definition of a missing symbol:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'defines'}]->(b:Artifact)
+WHERE b.attrs CONTAINS '[missing symbol name]'
+RETURN a.path LIMIT 10
+```
+
+**Find prior build error resolutions:**
+```
+vdb_search("build error [error message] Swift Xcode resolution")
+```
+
+Fix at the root of the import chain, not at each symptom site.
 
 ## Resolution Workflow
 

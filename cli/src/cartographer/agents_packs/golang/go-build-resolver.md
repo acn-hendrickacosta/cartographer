@@ -1,7 +1,7 @@
 ---
 name: go-build-resolver
 description: Go build, vet, and compilation error resolution specialist. Fixes build errors, go vet issues, and linter warnings with minimal changes. Use when Go builds fail.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, mcp__cartographer-vdb__vdb_search, mcp__cartographer-kg__kg_query, mcp__cartographer-kg__kg_neighbors
 model: sonnet
 ---
 
@@ -29,6 +29,29 @@ golangci-lint run 2>/dev/null || echo "golangci-lint not installed"
 go mod verify
 go mod tidy -v
 ```
+
+**After seeing the error, trace the import chain via the knowledge graph to find the root cause:**
+
+**Find what imports the file with the error:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'imports'}]->(b:Artifact)
+WHERE b.path CONTAINS '[file with error]'
+RETURN a.path LIMIT 20
+```
+
+**Find the definition of a missing symbol:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'defines'}]->(b:Artifact)
+WHERE b.attrs CONTAINS '[missing symbol name]'
+RETURN a.path LIMIT 10
+```
+
+**Find prior build error resolutions:**
+```
+vdb_search("build error [error message] Go resolution")
+```
+
+Fix at the root of the import chain, not at each symptom site.
 
 ## Resolution Workflow
 

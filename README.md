@@ -90,13 +90,19 @@ cartographer stack add golang
 
 Each `stack add` installs the stack's standards into `.claude/standards/<stack>/`, its skills into `.claude/skills/<skill-name>/SKILL.md`, and its agents into `.claude/agents/<agent-name>.md`. The core set (cross-stack standards + 15 core skills + 18 core agents) is also installed if not already present. All operations are idempotent: re-running installs only files that changed.
 
-### Seed existing documentation
+### Seed existing documentation and code
+
+Do a first full index pass after `init`. This populates the VDB and knowledge graph so Claude has something to query.
 
 ```bash
-cartographer seed docs/
+cartographer seed .          # index the whole project
+cartographer seed docs/      # index a documentation directory only
+cartographer seed docs/spec.md  # index a single file
 ```
 
-Ingests a documentation directory into the local index. Supported formats: `.md`, `.rst`, `.txt`, `.adoc`, `.docx`, `.pptx`, `.pdf`. Binary formats (`.docx`, `.pptx`, `.pdf`) require a running Claude Code session for extraction; they are skipped with a warning when run from a plain terminal.
+Supported formats: `.md`, `.rst`, `.txt`, `.adoc`, `.docx`, `.pptx`, `.pdf`, and source files for all supported languages. Binary formats (`.docx`, `.pptx`, `.pdf`) require a running Claude Code session for extraction; they are skipped with a warning when run from a plain terminal.
+
+Add `--enrich` to extract LLM-derived semantic relationships (`implements_spec`, `depends_on`) in addition to structural ones. This is slower (~30–60 s per file) and requires `claude` on PATH, so consider running it on a subset first.
 
 ### Index an existing codebase
 
@@ -108,17 +114,45 @@ Open a Claude Code session in the project and run:
 
 Bootstraps the knowledge base from the existing codebase and documentation in one pass. After it completes, the ingest hooks maintain the index incrementally on every edit.
 
+### Start the servers
+
+`cartographer serve` is the long-running process that keeps everything working. It starts two local MCP servers — one for the vector database, one for the knowledge graph — and a background filesystem watcher that re-indexes changed files automatically.
+
+```bash
+cartographer serve                              # VDB on :4010, KG on :4011, watcher on
+cartographer serve --vdb-port 4020 --kg-port 4021  # custom ports
+cartographer serve --no-watch                   # MCP servers only, no background re-indexing
+```
+
+Keep this running in a background terminal while you work. Claude Code connects to it via the two MCP server entries that `cartographer init` writes to `.mcp.json`.
+
+**Why the watcher matters:** Claude Code hooks only fire on Claude's own tool calls. A `git pull`, a branch switch, or an edit from another tool never triggers a hook, so the index would silently drift stale. The watcher uses OS-level filesystem events to catch every change, regardless of how it happened or whether hooks are allowed by your organization's Claude Code policy. Running `cartographer serve` with the watcher on (the default) is what actually keeps the index current.
+
 ### Browse the knowledge layer
 
 ```bash
-cartographer ui
+cartographer ui                  # opens a browser at http://127.0.0.1:7341
+cartographer ui --port 8080      # use a different port
+cartographer ui --no-browser     # print the URL instead of opening a tab
 ```
 
-Opens a local web interface at `http://localhost:7341` with four views:
-- **Search** — semantic search over the VDB
-- **Graph** — interactive KG explorer showing nodes and edges
-- **Registry** — browser for installed standards, skills, and agents
-- **Stats** — index health and coverage numbers
+Requires the `ui` extra. Install it with:
+
+```bash
+pip install "git+https://github.com/acn-hendrickacosta/cartographer.git#subdirectory=cli[ui]"
+```
+
+The UI has five views:
+
+| View | What it does |
+|---|---|
+| **Search** | Live semantic search as you type, filterable by artifact type (Doc / Code / Spec). Each result has a relevance bar and a truncate/expand toggle. Click any result to jump to its graph neighborhood. |
+| **Browse** | A collapsible file-tree of all module, doc, and spec nodes in the knowledge graph — a second way in when you don't know what to search for. Has its own filter box that auto-expands matching branches. |
+| **Graph** | Pan/zoom interactive graph. Drag nodes, click a node to open its detail panel and drill down into its neighborhood. Hover any edge to see its relationship type. A legend explains every node color and edge type. |
+| **Registry** | Every project registered on this machine, with the currently-open one highlighted. |
+| **Stats** | Chunk and node counts by type for the current project's local index, shown as proportional bars. |
+
+The UI shows your **local** index only. It does not query a central or shared index.
 
 ### Verify the setup
 
@@ -126,7 +160,23 @@ Opens a local web interface at `http://localhost:7341` with four views:
 cartographer doctor
 ```
 
-Reports the health of the config, local backends, hook wiring, and installed packs.
+Reports the health of the config, local backends, hook wiring, installed packs, and (for `central` topology) whether the remote VDB and KG backends are reachable. Run this first whenever something seems off.
+
+---
+
+## Command reference
+
+| Command | What it does |
+|---|---|
+| `cartographer init [--stack <name>] [--topology central]` | Scaffold the workspace: write `CLAUDE.md`, wire hooks into `.claude/settings.json`, write `.mcp.json`, provision the local VDB and KG, and apply the baseline standards pack. Idempotent — safe to re-run. |
+| `cartographer seed <path> [--enrich] [--no-recursive]` | Index a file or directory into the local VDB and KG. Run once after `init`; the serve watcher keeps things current after that. |
+| `cartographer stack add <name>` | Install a language standards pack (standards files, skills, agents) into the workspace. |
+| `cartographer serve [--vdb-port N] [--kg-port N] [--no-watch]` | Start the VDB and KG MCP servers and the background filesystem watcher. Keep this running while you work. |
+| `cartographer ui [--port N] [--no-browser]` | Open the local knowledge browser at `http://127.0.0.1:7341`. |
+| `cartographer doctor` | Validate the installation end to end: config, local backends, hook wiring, installed packs, and (if central) remote backend connectivity. |
+| `cartographer detect` | Read-only preview of what `init` would create or merge. Safe to run before committing to `init`. |
+| `cartographer recall <query> [--k N]` | Query the local KG and VDB directly from the terminal and print matches. Useful for confirming that specific content is indexed. |
+| `cartographer promote [--full] [--dry-run]` | Push local index changes to the shared central index (central topology only). |
 
 ---
 

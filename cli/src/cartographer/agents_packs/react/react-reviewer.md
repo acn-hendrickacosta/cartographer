@@ -1,7 +1,7 @@
 ---
 name: react-reviewer
 description: Expert React/JSX code reviewer specializing in hook correctness, render performance, server/client component boundaries, accessibility, and React-specific security. Use for any change touching .tsx/.jsx files or React component logic. MUST BE USED for React projects.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, mcp__cartographer-vdb__vdb_search, mcp__cartographer-kg__kg_query, mcp__cartographer-kg__kg_neighbors
 model: sonnet
 ---
 
@@ -23,6 +23,35 @@ You are a senior React engineer reviewing React component code for correctness, 
 | **Server Action input validation, env var leaks via `NEXT_PUBLIC_*`** | **react-reviewer** |
 
 For a JSX/TSX PR, invoke both agents. For a pure `.ts` change with no React imports, invoke only `typescript-reviewer`.
+
+## Cartographer knowledge index
+
+Before reading any files, use the knowledge index to understand the full impact of the change.
+
+**1. Find relevant standards for the code under review:**
+```
+vdb_search("React code review hooks performance accessibility server components")
+```
+
+**2. Find all callers and importers of changed code:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'imports'}]->(b:Artifact)
+WHERE b.path CONTAINS '[changed-file-path]'
+RETURN a.path LIMIT 20
+
+MATCH (a:Artifact)-[r:RelatesTo {type: 'calls'}]->(b:Artifact)
+WHERE b.attrs CONTAINS '[changed-function-name]'
+RETURN a.path LIMIT 20
+```
+
+**3. Check for related specs the changed code implements:**
+```
+MATCH (a:Artifact)-[r:RelatesTo {type: 'implements_spec'}]->(b:Artifact)
+WHERE a.path CONTAINS '[changed-file-path]'
+RETURN b.path, b.attrs LIMIT 10
+```
+
+Run these after identifying changed files from the diff. Review any files the KG shows are callers or importers — they are also in scope.
 
 ## When invoked
 
