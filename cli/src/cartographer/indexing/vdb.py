@@ -63,11 +63,48 @@ def _table_names(db: lancedb.DBConnection) -> list[str]:
     return db.list_tables().tables
 
 
+def _default_literal(field: pa.Field) -> str | None:
+    """A SQL literal to backfill a newly added column on existing rows.
+
+    Returns None for types with no safe default (e.g. the embedding vector),
+    which should never be missing from an existing table in practice.
+    """
+    if pa.types.is_boolean(field.type):
+        return "false"
+    if pa.types.is_string(field.type):
+        return "''"
+    if pa.types.is_integer(field.type):
+        return "0"
+    if pa.types.is_floating(field.type):
+        return "0.0"
+    return None
+
+
+def _migrate_schema(table, embedding_dim: int) -> None:
+    """Backfill columns added to `_schema()` after this table was created.
+
+    LanceDB tables are fixed-schema; `create_table` only runs once per scope,
+    so a field added to ChunkRecord later (e.g. is_tombstone in Phase 3.2)
+    is silently absent from every table created before that change. Every
+    upsert into such a table then fails with "Field not found in target
+    schema". Self-heal by adding the missing column with a safe default.
+    """
+    existing_fields = {f.name for f in table.schema}
+    for field in _schema(embedding_dim):
+        if field.name in existing_fields:
+            continue
+        default = _default_literal(field)
+        if default is not None:
+            table.add_columns({field.name: default})
+
+
 def ensure_collection(db_path: Path, scope: str, embedding_dim: int = DEFAULT_EMBEDDING_DIM):
     """Create the per-scope table if absent. Idempotent."""
     db = _connect(db_path)
     if scope in _table_names(db):
-        return db.open_table(scope)
+        table = db.open_table(scope)
+        _migrate_schema(table, embedding_dim)
+        return table
     return db.create_table(scope, schema=_schema(embedding_dim))
 
 
