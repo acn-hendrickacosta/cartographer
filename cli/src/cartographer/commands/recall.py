@@ -72,7 +72,7 @@ def run(
             override = config_mod.load_local_override(workspace)
             central_vdb = get_central_vdb(cfg, override)
             if central_vdb.is_reachable():
-                global_hits = central_vdb.query(cfg.project.id, embedding=embedding, k=k)
+                global_hits = central_vdb.query(cfg.project.id, embedding=embedding, k=k, where="is_tombstone = FALSE")
                 for h in global_hits:
                     h["origin"] = "global"
             else:

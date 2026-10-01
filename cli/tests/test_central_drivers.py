@@ -375,3 +375,214 @@ def test_promote_idempotent(tmp_path):
     do_promote()
     stats_after_second = vdb.collection_stats(pid)
     assert stats_after_first == stats_after_second
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.2: Tombstone integration tests (exit criteria 1–6)
+# ---------------------------------------------------------------------------
+
+@integration
+@pgvector_only
+def test_tombstone_path_sets_flag_in_pgvector(tmp_path):
+    """Exit criterion 1: tombstone_path marks is_tombstone=True for all chunks at path."""
+    drv = _make_pgvector_driver()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    drv.ensure_collection(pid, embedding_dim=384)
+    c = _chunk(pid, path="src/deleted.py")
+    drv.upsert(pid, [c], embedding_dim=384)
+
+    # Confirm chunk is visible before tombstone
+    results_before = drv.query(pid, embedding=[0.1] * 384, k=5)
+    assert any(r["path"] == "src/deleted.py" for r in results_before)
+
+    drv.tombstone_path(pid, "src/deleted.py")
+
+    # Confirm chunk is excluded from query after tombstone (driver hard-filters is_tombstone=FALSE)
+    results_after = drv.query(pid, embedding=[0.1] * 384, k=5)
+    assert not any(r["path"] == "src/deleted.py" for r in results_after), (
+        "tombstoned artifact must not appear in VDB query results"
+    )
+
+    # Confirm is_tombstone=TRUE in the raw table
+    from cartographer.indexing.vdb_pgvector import _table_name
+    table = _table_name(pid)
+    conn = drv._connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT is_tombstone FROM {table} WHERE path = %s", ("src/deleted.py",))
+            rows = cur.fetchall()
+        assert rows, "chunk not found in table"
+        assert all(row[0] is True for row in rows), "is_tombstone must be TRUE after tombstone_path"
+    finally:
+        conn.close()
+
+
+@integration
+@neo4j_only
+def test_set_tombstoned_marks_kg_node(tmp_path):
+    """Exit criterion 2: set_tombstoned sets tombstoned_at on the KG node."""
+    import datetime
+    drv = _make_neo4j_driver()
+    drv.ensure_namespace()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    node = _node(pid, path="src/deleted.py")
+    drv.upsert_nodes([node])
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    drv.set_tombstoned("src/deleted.py", now)
+
+    result = drv.query(
+        "MATCH (a:Artifact {id: $id}) RETURN a.tombstoned_at AS ts",
+        {"id": node.id},
+    )
+    assert result, "node not found after set_tombstoned"
+    assert result[0]["ts"] == now, (
+        f"tombstoned_at must equal the timestamp passed; got {result[0]['ts']!r}"
+    )
+
+
+@integration
+@pgvector_only
+def test_tombstoned_artifacts_excluded_from_recall(tmp_path):
+    """Exit criterion 3: tombstoned artifacts do not appear in global VDB recall results."""
+    drv = _make_pgvector_driver()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    drv.ensure_collection(pid, embedding_dim=384)
+    live = _chunk(pid, path="src/live.py")
+    dead = _chunk(pid, suffix="_dead", path="src/deleted.py")
+    drv.upsert(pid, [live, dead], embedding_dim=384)
+
+    drv.tombstone_path(pid, "src/deleted.py")
+
+    results = drv.query(pid, embedding=[0.1] * 384, k=10)
+    paths = [r["path"] for r in results]
+    assert "src/live.py" in paths, "live artifact must appear in recall"
+    assert "src/deleted.py" not in paths, "tombstoned artifact must be excluded from recall"
+
+
+@integration
+@neo4j_only
+def test_tombstoned_kg_nodes_excluded_from_neighbors(tmp_path):
+    """Exit criterion 4: tombstoned KG nodes do not appear in neighbor traversal."""
+    import datetime
+    drv = _make_neo4j_driver()
+    drv.ensure_namespace()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    n_live = _node(pid, path="src/live.py")
+    n_dead = _node(pid, path="src/deleted.py")
+    n_root = _node(pid, path="src/root.py")
+    drv.upsert_nodes([n_root, n_live, n_dead])
+    drv.upsert_edges([_edge(n_root.id, n_live.id), _edge(n_root.id, n_dead.id)])
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    drv.set_tombstoned("src/deleted.py", now)
+
+    neighbors = drv.neighbors(n_root.id, depth=1)
+    neighbor_ids = [n["id"] for n in neighbors]
+    assert n_live.id in neighbor_ids, "live neighbor must appear"
+    assert n_dead.id not in neighbor_ids, "tombstoned neighbor must be excluded"
+
+
+@integration
+@pgvector_only
+def test_query_all_paths_excludes_tombstoned(tmp_path):
+    """query_all_paths returns only non-tombstoned paths — used by promote for deletion detection."""
+    drv = _make_pgvector_driver()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    drv.ensure_collection(pid, embedding_dim=384)
+    live = _chunk(pid, path="src/live.py")
+    dead = _chunk(pid, suffix="_dead", path="src/deleted.py")
+    drv.upsert(pid, [live, dead], embedding_dim=384)
+    drv.tombstone_path(pid, "src/deleted.py")
+
+    paths = drv.query_all_paths(pid)
+    assert "src/live.py" in paths
+    assert "src/deleted.py" not in paths
+
+
+@integration
+@both_backends
+def test_gc_removes_tombstones_immediately(tmp_path, monkeypatch):
+    """Exit criteria 5 & 6: gc --older-than 0 removes tombstoned artifacts; --dry-run does not."""
+    import datetime
+    from typer.testing import CliRunner
+    from cartographer import config as config_mod, registry
+    from cartographer.cli import app
+
+    # Set up a minimal workspace pointing at the test Docker backends
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    (workspace / ".cartographer" / "local").mkdir(parents=True)
+
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    cfg = config_mod.CartographerConfig(
+        project=config_mod.ProjectSection(id=pid, name="gc-test"),
+        topology=config_mod.TopologySection(mode="central"),
+        isolation=config_mod.IsolationSection(tenant="default"),
+    )
+    config_mod.save_config(workspace, cfg)
+
+    override_path = workspace / "cartographer.local.toml"
+    override_path.write_text(
+        "[central_vdb]\n"
+        f"host = \"{PG_HOST}\"\n"
+        f"port = {PG_PORT}\n"
+        f"user = \"{PG_USER}\"\n"
+        f"password = \"{PG_PASSWORD}\"\n"
+        f"database = \"{PG_DB}\"\n"
+        "[central_kg]\n"
+        f"uri = \"{NEO4J_URI}\"\n"
+        f"user = \"{NEO4J_USER}\"\n"
+        f"password = \"{NEO4J_PASS}\"\n"
+    )
+
+    # Seed a chunk and tombstone it
+    vdb_drv = _make_pgvector_driver()
+    vdb_drv.ensure_collection(pid, embedding_dim=384)
+    c = _chunk(pid, path="src/to_delete.py")
+    # Back-date updated_at so gc --older-than 0 picks it up immediately
+    from cartographer.indexing.vdb import ChunkRecord
+    c_old = ChunkRecord(**{**c.model_dump(), "updated_at": "2020-01-01T00:00:00+00:00"})
+    vdb_drv.upsert(pid, [c_old], embedding_dim=384)
+    vdb_drv.tombstone_path(pid, "src/to_delete.py")
+
+    kg_drv = _make_neo4j_driver()
+    kg_drv.ensure_namespace()
+    node = _node(pid, path="src/to_delete.py")
+    kg_drv.upsert_nodes([node])
+    kg_drv.set_tombstoned("src/to_delete.py", "2020-01-01T00:00:00+00:00")
+
+    # dry-run: nothing deleted
+    result = CliRunner().invoke(app, ["gc", "--path", str(workspace), "--dry-run", "--older-than", "0"])
+    assert result.exit_code == 0, f"gc --dry-run failed:\n{result.output}"
+    assert "to_delete.py" in result.output
+
+    # Confirm chunk still in table after dry-run
+    from cartographer.indexing.vdb_pgvector import _table_name
+    table = _table_name(pid)
+    conn = vdb_drv._connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE path = %s AND is_tombstone = TRUE", ("src/to_delete.py",))
+            assert cur.fetchone()[0] == 1, "chunk must still exist after dry-run"
+    finally:
+        conn.close()
+
+    # Real gc: chunk and node deleted
+    result = CliRunner().invoke(app, ["gc", "--path", str(workspace), "--older-than", "0"])
+    assert result.exit_code == 0, f"gc failed:\n{result.output}"
+    assert "gc complete" in result.output
+
+    conn = vdb_drv._connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE path = %s", ("src/to_delete.py",))
+            assert cur.fetchone()[0] == 0, "tombstoned chunk must be deleted after gc"
+    finally:
+        conn.close()
+
+    kg_result = kg_drv.query(
+        "MATCH (a:Artifact {id: $id}) RETURN count(*) AS cnt",
+        {"id": node.id},
+    )
+    assert kg_result[0]["cnt"] == 0, "tombstoned KG node must be deleted after gc"

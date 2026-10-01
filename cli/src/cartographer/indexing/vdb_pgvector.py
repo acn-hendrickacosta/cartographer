@@ -64,7 +64,8 @@ class PgvectorDriver:
                             origin TEXT NOT NULL,
                             text TEXT NOT NULL,
                             embedding vector({embedding_dim}),
-                            updated_at TEXT NOT NULL
+                            updated_at TEXT NOT NULL,
+                            is_tombstone BOOLEAN NOT NULL DEFAULT FALSE
                         )
                     """)
                     cur.execute(f"""
@@ -88,24 +89,25 @@ class PgvectorDriver:
                         cur.execute(f"""
                             INSERT INTO {table}
                                 (id, project_id, scope, artifact_type, path, symbol,
-                                 spec_id, origin, text, embedding, updated_at)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                 spec_id, origin, text, embedding, updated_at, is_tombstone)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                             ON CONFLICT (id) DO UPDATE SET
-                                project_id   = EXCLUDED.project_id,
-                                scope        = EXCLUDED.scope,
+                                project_id    = EXCLUDED.project_id,
+                                scope         = EXCLUDED.scope,
                                 artifact_type = EXCLUDED.artifact_type,
-                                path         = EXCLUDED.path,
-                                symbol       = EXCLUDED.symbol,
-                                spec_id      = EXCLUDED.spec_id,
-                                origin       = EXCLUDED.origin,
-                                text         = EXCLUDED.text,
-                                embedding    = EXCLUDED.embedding,
-                                updated_at   = EXCLUDED.updated_at
+                                path          = EXCLUDED.path,
+                                symbol        = EXCLUDED.symbol,
+                                spec_id       = EXCLUDED.spec_id,
+                                origin        = EXCLUDED.origin,
+                                text          = EXCLUDED.text,
+                                embedding     = EXCLUDED.embedding,
+                                updated_at    = EXCLUDED.updated_at,
+                                is_tombstone  = EXCLUDED.is_tombstone
                         """, (
                             chunk.id, chunk.project_id, chunk.scope,
                             chunk.artifact_type, chunk.path, chunk.symbol,
                             chunk.spec_id, chunk.origin, chunk.text,
-                            chunk.embedding, chunk.updated_at,
+                            chunk.embedding, chunk.updated_at, chunk.is_tombstone,
                         ))
         finally:
             conn.close()
@@ -122,13 +124,13 @@ class PgvectorDriver:
         conn = self._connect()
         try:
             with conn.cursor() as cur:
-                where_clause = f"AND ({where})" if where else ""
+                extra_where = f"AND ({where})" if where else ""
                 cur.execute(f"""
                     SELECT id, project_id, scope, artifact_type, path,
                            symbol, spec_id, origin, text, updated_at,
                            1 - (embedding <=> %s::vector) AS score
                     FROM {table}
-                    WHERE true {where_clause}
+                    WHERE is_tombstone = FALSE {extra_where}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                 """, (embedding, embedding, k))
@@ -148,6 +150,33 @@ class PgvectorDriver:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(f"DELETE FROM {table} WHERE id = ANY(%s)", (ids,))
+        finally:
+            conn.close()
+
+    def query_all_paths(self, project_id: str) -> list[str]:
+        """Return all distinct paths currently in the global index for this project."""
+        table = _table_name(project_id)
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT DISTINCT path FROM {table} WHERE is_tombstone = FALSE")
+                return [row[0] for row in cur.fetchall()]
+        except Exception:
+            return []
+        finally:
+            conn.close()
+
+    def tombstone_path(self, project_id: str, path: str) -> None:
+        """Mark all chunks for the given path as tombstoned in the global index."""
+        table = _table_name(project_id)
+        conn = self._connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE {table} SET is_tombstone = TRUE WHERE path = %s",
+                        (path,),
+                    )
         finally:
             conn.close()
 

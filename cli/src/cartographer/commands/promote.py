@@ -133,9 +133,22 @@ def run(
         changed_node_ids = {n.id for n in all_nodes}
         all_edges = [e for e in all_edges if e.src in changed_node_ids]
 
+    # Tombstone detection: paths previously promoted but absent from local VDB
+    local_paths = {c.path for c in all_chunks}
+    try:
+        global_paths = set(central_vdb.query_all_paths(project_id))
+    except Exception as exc:
+        console.print(f"[yellow]warning: could not read global paths for tombstone detection: {exc}[/yellow]")
+        global_paths = set()
+    deleted_paths = global_paths - local_paths
+
     console.print(f"  chunks:   {len(all_chunks)}")
     console.print(f"  nodes:    {len(all_nodes)}")
     console.print(f"  edges:    {len(all_edges)}")
+    if deleted_paths:
+        console.print(f"  deleted:  {len(deleted_paths)} path(s) to tombstone")
+        for p in sorted(deleted_paths):
+            console.print(f"    - {p}")
 
     if dry_run:
         console.print("[yellow]--dry-run: no changes written[/yellow]")
@@ -176,6 +189,20 @@ def run(
             edge_task = progress.add_task("promoting edges", total=len(all_edges))
             central_kg.upsert_edges(all_edges)
             progress.advance(edge_task, len(all_edges))
+
+    # Write tombstone records for deleted paths
+    if deleted_paths:
+        now = _now()
+        for path in deleted_paths:
+            try:
+                central_vdb.tombstone_path(project_id, path)
+            except Exception as exc:
+                console.print(f"[yellow]warning: failed to tombstone VDB path {path}: {exc}[/yellow]")
+            try:
+                central_kg.set_tombstoned(path, now)
+            except Exception as exc:
+                console.print(f"[yellow]warning: failed to tombstone KG node {path}: {exc}[/yellow]")
+        console.print(f"  tombstoned: {len(deleted_paths)} deleted path(s)")
 
     # Update last_promoted_at in the registry
     if record:

@@ -32,6 +32,7 @@ class ChunkRecord(BaseModel):
     text: str
     embedding: list[float]
     updated_at: str
+    is_tombstone: bool = False
 
 
 def _schema(embedding_dim: int) -> pa.Schema:
@@ -48,6 +49,7 @@ def _schema(embedding_dim: int) -> pa.Schema:
             pa.field("text", pa.string()),
             pa.field("embedding", pa.list_(pa.float32(), embedding_dim)),
             pa.field("updated_at", pa.string()),
+            pa.field("is_tombstone", pa.bool_()),
         ]
     )
 

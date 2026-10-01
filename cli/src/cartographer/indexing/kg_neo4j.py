@@ -96,12 +96,27 @@ class Neo4jDriver:
         finally:
             drv.close()
 
+    def set_tombstoned(self, path: str, timestamp: str) -> None:
+        """Set tombstoned_at on the Artifact node matching the given path."""
+        drv = self._driver()
+        try:
+            with drv.session() as session:
+                session.run(
+                    "MATCH (a:Artifact {path: $path}) SET a.tombstoned_at = $ts",
+                    path=path, ts=timestamp,
+                )
+        finally:
+            drv.close()
+
     def neighbors(self, node_id: str, depth: int = 1, scope: str | None = None) -> list[dict]:
         depth = max(1, min(depth, 4))
-        scope_filter = "WHERE r.scope = $scope" if scope else ""
+        conditions = ["(n.tombstoned_at IS NULL OR n.tombstoned_at = '')"]
+        if scope:
+            conditions.append("r.scope = $scope")
+        where_clause = "WHERE " + " AND ".join(conditions)
         cypher = (
             f"MATCH (a:Artifact {{id: $id}})-[r:RELATES_TO*1..{depth}]-(n:Artifact) "
-            f"{scope_filter} "
+            f"{where_clause} "
             "RETURN DISTINCT n.id AS id, n.type AS type, n.path AS path, n.scope AS scope"
         )
         params: dict = {"id": node_id}

@@ -126,8 +126,10 @@ def test_central_topology_queries_central_vdb(tmp_path, monkeypatch):
         mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
         result = _invoke(workspace)
 
-    # Central VDB must be called with the project_id as first positional arg
-    mock_central_vdb.query.assert_called_once_with("proj_central_001", embedding=ANY, k=ANY)
+    # Central VDB must be called with the project_id as first positional arg and a tombstone filter
+    mock_central_vdb.query.assert_called_once_with(
+        "proj_central_001", embedding=ANY, k=ANY, where=ANY
+    )
     assert result.exit_code == 0
 
 
@@ -347,3 +349,79 @@ def test_tenant_mismatch_blocks_before_central_query(tmp_path, monkeypatch):
     assert result.exit_code != 0
     assert "tenant" in result.output.lower()
     mock_central_vdb.query.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 8. Tombstone filter: recall never returns tombstoned global artifacts
+# ---------------------------------------------------------------------------
+
+def test_tombstoned_artifacts_excluded_from_global_recall(tmp_path, monkeypatch):
+    """recall must pass a tombstone filter so tombstoned chunks are excluded.
+
+    The PgvectorDriver.query already hard-filters is_tombstone=FALSE.
+    This test verifies recall.py passes a where clause that makes intent explicit
+    and that tombstoned results from the mock are not surfaced.
+    """
+    workspace = _setup_project(tmp_path, "proj_central_008", topology="central")
+
+    reg_path = tmp_path / "registry.json"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg_path)
+    registry.register_project("proj_central_008", "proj", "central", "default", workspace)
+
+    mock_central_vdb = MagicMock()
+    mock_central_vdb.is_reachable.return_value = True
+    # Driver returns nothing because tombstoned chunks are filtered server-side
+    mock_central_vdb.query.return_value = []
+
+    mock_central_kg = MagicMock()
+    mock_central_kg.is_reachable.return_value = True
+    mock_central_kg.query.return_value = []
+
+    with patch("cartographer.indexing.central.get_central_vdb", return_value=mock_central_vdb), \
+         patch("cartographer.indexing.central.get_central_kg", return_value=mock_central_kg), \
+         patch("cartographer.indexing.vdb.query", return_value=[_local_hit("src/main.py")]), \
+         patch("cartographer.indexing.kg.query", return_value=[]), \
+         patch("fastembed.TextEmbedding") as mock_embed:
+        mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
+        result = _invoke(workspace)
+
+    # Verify recall passes a tombstone where-clause to the central VDB driver
+    call_kwargs = mock_central_vdb.query.call_args
+    assert call_kwargs is not None, "central VDB query was not called"
+    where_arg = call_kwargs.kwargs.get("where", "")
+    assert "is_tombstone" in where_arg, (
+        f"recall must pass a tombstone filter; got where={where_arg!r}"
+    )
+    assert result.exit_code == 0
+
+
+def test_tombstone_filter_does_not_exclude_live_results(tmp_path, monkeypatch):
+    """A non-tombstoned global result must still appear in recall output."""
+    workspace = _setup_project(tmp_path, "proj_central_009", topology="central")
+
+    reg_path = tmp_path / "registry.json"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg_path)
+    registry.register_project("proj_central_009", "proj", "central", "default", workspace)
+
+    mock_central_vdb = MagicMock()
+    mock_central_vdb.is_reachable.return_value = True
+    # Driver returns a live (non-tombstoned) result
+    live_hit = _global_hit("src/live_service.py")
+    mock_central_vdb.query.return_value = [live_hit]
+
+    mock_central_kg = MagicMock()
+    mock_central_kg.is_reachable.return_value = True
+    mock_central_kg.query.return_value = []
+
+    with patch("cartographer.indexing.central.get_central_vdb", return_value=mock_central_vdb), \
+         patch("cartographer.indexing.central.get_central_kg", return_value=mock_central_kg), \
+         patch("cartographer.indexing.vdb.query", return_value=[]), \
+         patch("cartographer.indexing.kg.query", return_value=[]), \
+         patch("fastembed.TextEmbedding") as mock_embed:
+        mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
+        result = _invoke(workspace)
+
+    assert "live_service.py" in result.output, (
+        f"Live global result must appear in output:\n{result.output}"
+    )
+    assert result.exit_code == 0
