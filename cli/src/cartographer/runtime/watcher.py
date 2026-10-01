@@ -103,12 +103,17 @@ class _ProjectHandler(FileSystemEventHandler):
             self._consider(event.src_path)
 
     def on_deleted(self, event: FileSystemEvent) -> None:
-        if not event.is_directory:
+        # Without this filter, LanceDB/Kuzu's own internal manifest and temp-file
+        # churn under .cartographer/ (every write creates and deletes several)
+        # gets marked deleted, triggering delete_by_path, which writes a new
+        # version, which deletes more temp files — a self-sustaining loop.
+        if not event.is_directory and is_ingestible_path(Path(event.src_path)):
             self._tracker.mark_deleted(self._project_id, Path(event.src_path))
 
     def on_moved(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
-            self._tracker.mark_deleted(self._project_id, Path(event.src_path))
+            if is_ingestible_path(Path(event.src_path)):
+                self._tracker.mark_deleted(self._project_id, Path(event.src_path))
             self._consider(event.dest_path)
 
 
