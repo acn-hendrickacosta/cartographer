@@ -20,6 +20,7 @@ dependencies = [
     "psycopg2-binary>=2.9",
     "neo4j>=5.0",
     "watchdog>=4.0",
+    "mcp>=1.0",
 ]
 
 [project.optional-dependencies]

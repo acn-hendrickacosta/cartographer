@@ -19,13 +19,13 @@ Persistent knowledge layer for Claude Code. Cartographer indexes your codebase i
 ## Install
 
 ```bash
-pipx install --editable ".[embeddings,mcp]"
+pipx install --editable ".[embeddings]"
 ```
 
 Or for a shared team install, each developer runs:
 
 ```bash
-pipx install "git+https://<host>/<org>/cartographer.git#subdirectory=cli[embeddings,mcp]"
+pipx install "git+https://<host>/<org>/cartographer.git#subdirectory=cli[embeddings]"
 ```
 
 **pipx vs. plain `pip install`:** pipx-managed environments do not ship a `pip` binary inside them. If you installed via pipx and later need to add an optional extra (e.g. TypeScript parsing), use `pipx inject`, not `pip install` — see [Troubleshooting](#troubleshooting).
@@ -334,7 +334,7 @@ WHERE b.attrs CONTAINS 'BaseValidator' RETURN a.path LIMIT 10
 | Extra | What it adds | When you need it |
 |---|---|---|
 | `embeddings` (alias `embed`) | `fastembed` for semantic VDB search | Required for `vdb_search`, `recall`, and `cartographer ui`'s Search tab |
-| `mcp` | MCP SDK for the HTTP servers | Required for `cartographer serve` |
+| `mcp` | MCP SDK for the HTTP servers | Already included in core dependencies — this extra is redundant but harmless to specify |
 | `ui` | `fastapi` + `uvicorn` | Required for `cartographer ui` |
 | `parsers-ts` | `tree-sitter` + `tree-sitter-typescript` | Real structural parsing for `.ts`/`.tsx` (see [Language support](#language-support)) |
 | `parsers-go` | `tree-sitter` + `tree-sitter-go` | **Not yet functional** — no Go parser implementation exists yet; installing this does nothing today |
@@ -343,7 +343,7 @@ WHERE b.attrs CONTAINS 'BaseValidator' RETURN a.path LIMIT 10
 | `central` | `psycopg2-binary` + `neo4j` | Already included in core dependencies — this extra is redundant but harmless to specify |
 | `dev` | `pytest`, `httpx` | Running the test suite |
 
-Python and the regex fallback need nothing extra. `psycopg2-binary` and `neo4j` ship in core dependencies, so central topology works with zero extra install step.
+Python and the regex fallback need nothing extra. `psycopg2-binary`, `neo4j`, and `mcp` ship in core dependencies — central topology and `cartographer serve` work with zero extra install steps.
 
 ---
 
