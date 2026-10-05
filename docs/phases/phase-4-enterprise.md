@@ -1,5 +1,12 @@
 # Phase 4: Enterprise Scale
 
+**Alignment check (2026-10-05):** reviewed against the codebase after Phase 3.1–3.4 landed. All doc cross-references (ARCHITECTURE.md, DATA_MODEL.md, phase-2-central.md, phase-3-sync-lifecycle.md, ADR 0007) still resolve, and `kg_server.py`'s current tools/routes (`kg_query`, `kg_neighbors`, `kg_stats`, `/health`, `/api/ingest`, `/api/query`, `/api/neighbors`) are exactly what this doc assumes for slotting in `kg_impact`/`kg_search`. Fixed two filename typos (`.cartographer.local.toml` → `cartographer.local.toml`, no leading dot) and added four notes below, at the sections they affect, flagging places where Phase 3 work this doc predates needs to be reconciled with before implementing:
+
+1. **Edge taxonomy governance** — the `[kg]` TOML section this proposes would collide in name with an already-existing, already-dead `[kg]` section in `cartographer.example.toml`.
+2. **CI/CD freshness integration** — `promote --diff` needs to coexist with Phase 3.3's `last_promoted_sha`-based rename detection, not duplicate it.
+3. **Graph versioning** — `registry.ProjectRecord` already has a `last_promoted_sha` field (Phase 3.3, single-value, a different purpose than the proposed `PromotionRecord` history).
+4. **`kg_impact`** — its draft Cypher hits a known Kuzu binder limitation if ever run against local scope.
+
 ## Goal
 
 Make Cartographer usable at org-scale: multiple teams sharing a central backend, graphs that stay fresh without manual intervention, cross-project impact analysis, and governed relationship taxonomies. After Phase 4, a platform team can deploy Cartographer once and onboard dozens of engineering teams without each team managing their own indexing infrastructure.
@@ -47,7 +54,7 @@ Phase 4 builds on these — it does not replace them.
 | Edge taxonomy governance | Canonical edge type registry; lint at seed time; schema drift detection |
 | `kg_search` (NL→Cypher) | Natural-language query tool that translates to Cypher internally; agents don't need to write raw Cypher |
 | Federated read with global overlays | Local graphs link to global nodes; cross-repo queries without merging all projects into one graph |
-| `cartographer doctor` enterprise checks | RBAC token valid; CI integration configured; taxonomy version matches server |
+| `cartographer doctor` enterprise checks | RBAC token valid; CI integration configured; taxonomy version matches server (appends to the existing check list — `doctor.py` already reports local-VDB/KG health, central reachability, MCP wiring, parser installs, and a `serve` liveness check added in Phase 3.2.1) |
 
 ### Explicitly out of scope
 
@@ -67,7 +74,7 @@ Phase 4 builds on these — it does not replace them.
 **What ships:**
 
 - **Access model**: three principals — org admin, team member, read-only viewer. Three resource types — project graph (private to team), team graph (shared within team), global overlay (read-only for all).
-- **Token model**: admin issues team tokens scoped to a set of `project_id`s. Token stored in `.cartographer.local.toml` alongside the central backend credentials. Token is validated by the MCP servers on every tool call.
+- **Token model**: admin issues team tokens scoped to a set of `project_id`s. Token stored in `cartographer.local.toml` alongside the central backend credentials. Token is validated by the MCP servers on every tool call.
 - **Enforcement point**: both VDB and KG MCP servers validate the team token before returning results. A query to `project_id` the token is not scoped to returns `PERMISSION_DENIED`, not an empty result.
 - **Global overlay**: nodes seeded to `scope="global"` are readable by all tokens in the same tenant. Write to global scope still requires the promotion token from Phase 2.
 - **Admin CLI**: `cartographer admin token issue --project <id> --team <name>` (admin only). `cartographer admin token revoke`. Tokens stored in a `carto_tokens` table on the central backend.
@@ -92,6 +99,8 @@ Phase 4 builds on these — it does not replace them.
 - Same diff logic applied to the promotion pipeline
 - Only promotes artifacts changed since `<base-ref>` to global scope
 
+> **Reconcile with Phase 3.3 before implementing:** `promote.py` already uses git diffing — `registry.ProjectRecord.last_promoted_sha` drives `git diff --name-status --diff-filter=R {last_promoted_sha}..HEAD` for rename detection (see `phase-3.3-rename-tracking.md`). `--diff <base-ref>` as drafted here would be a second, independent git-diff mechanism computing a different file list for a different purpose (which files to promote, vs. which files were renamed). Decide whether `--diff` should reuse `last_promoted_sha` as its default base-ref (likely — "changed since last promote" is already the concept `--incremental` embodies via timestamps) rather than introducing a second, parallel notion of "the baseline to diff against."
+
 **CI template** (GitHub Actions, GitLab CI):
 - Provided as `docs/ci-templates/github-actions.yml` and `docs/ci-templates/gitlab-ci.yml`
 - Runs on push to main: `cartographer seed --diff origin/main~1 && cartographer promote --diff origin/main~1`
@@ -101,6 +110,8 @@ Phase 4 builds on these — it does not replace them.
 - On each successful promote, write a `PromotionRecord` to the registry: `{ project_id, commit_sha, promoted_at, node_count, edge_count }`
 - `kg_query` accepts an optional `at_commit` parameter; if supplied, filters to nodes promoted at or before that commit
 - `cartographer log` command: lists promotion history for a project
+
+> **Note:** `registry.ProjectRecord` already has a `last_promoted_sha` field (Phase 3.3) — but it is a single value overwritten on every promote, used as the diff base for rename detection, not a history. `PromotionRecord` needs to be a genuinely separate, append-only list (one entry per promote), not a repurposing of `last_promoted_sha` — conflating the two would break rename detection's "diff since the last promote" semantics the moment `cartographer log`/`at_commit` needs to look further back than the most recent promote.
 
 ---
 
@@ -145,6 +156,10 @@ ORDER BY distance
 
 **Output**: JSON list of `{ path, project_id, type, distance }` — which files in which projects depend on the target node, sorted by distance (direct dependents first).
 
+> **Missing tombstone filter:** the draft query above has no `tombstoned_at` check on `dependent`. Phase 3.2 established the convention that traversal excludes tombstoned nodes — `Neo4jDriver.neighbors()` filters `(n.tombstoned_at IS NULL OR n.tombstoned_at = '')`. Without the same filter here, `kg_impact` would report a deleted file as still depending on the target, which is exactly the kind of stale-impact-report this tool exists to prevent.
+
+> **Kuzu caveat if `scope="local"`:** this query is fine as written against Neo4j (the default, `scope="global"` path). But `kg.py`'s existing `neighbors()` function hit a real Kuzu binder limitation with this exact shape — a `$param` referenced inside an `ALL(...)` predicate over a variable-length path pattern triggers a `KU_UNREACHABLE` assertion in Kuzu's query binder. `neighbors()` works around it by validating the value and inlining it as a string literal instead of a bound parameter (see the comment at `kg.py:neighbors()`). If `kg_impact` is ever invoked with `scope="local"` against the local Kuzu KG, `$edge_types` inside `ALL(...)` needs the same literal-inlining treatment, not a bound parameter.
+
 ---
 
 ### 4. Edge taxonomy governance
@@ -170,6 +185,8 @@ taxonomy_version = "1.0"
 ```
 - `cartographer doctor` validates that the project's pinned taxonomy version matches the server's current version
 - Schema drift: `doctor` reports which edge types the project uses that are not in the server taxonomy
+
+> **`[kg]` section name is already taken, and not in a good way.** `cartographer.example.toml` has a top-level `[kg]` section today (`driver = "kuzu"`) that `config.py`'s `load_config` never actually reads — it only parses `[backends.kg]`. That section has been dead documentation since before Phase 3 (same class of bug as `[recall]` vs. the real `[retrieval]`, found and partially fixed during Phase 3.4). Writing `taxonomy_version` into a bare `[kg]` section would be silently ignored exactly the same way, unless `config.py` is given a real place to parse it from. Before implementing: either extend `CentralSection`/`BackendsSection.kg` properly, or pick a section name that isn't already a stale no-op (e.g. `[kg_governance]`), and fix or remove the existing dead `[kg]`/`[vdb]`/`[embedder]`/`[ingestion]` sections in `cartographer.example.toml` while at it — they have the identical problem independent of Phase 4.
 
 **`cartographer taxonomy list`** command: prints the current canonical edge types and their definitions.
 
@@ -214,7 +231,7 @@ def kg_search(
 
 **Dependency:** requires `anthropic` Python SDK as a new optional dep (`pip install cartographer[kg-search]`). The tool returns a graceful error if the dep is missing.
 
-**Design constraint:** the Claude call is a direct API call using the key in `.cartographer.local.toml`, not a recursive MCP call. This avoids the deadlock pattern documented in the MCP server implementation notes.
+**Design constraint:** the Claude call is a direct API call using the key in `cartographer.local.toml`, not a recursive MCP call. This avoids the deadlock pattern documented in the MCP server implementation notes.
 
 ---
 
@@ -229,6 +246,7 @@ def kg_search(
   [kg]
   global_overlays = ["design-system", "platform-api"]  # project_ids whose global scope is readable
   ```
+  Same `[kg]`-is-dead-today caveat as the taxonomy section above applies here — resolve once, consistently, for both fields.
 - **Query routing**: `kg_query` and `kg_search` with `scope="global"` now fan out across the local graph + any configured overlays, merging results before returning
 - **`kg_impact` federation**: traversal follows edges across project boundaries via overlay links — a `calls` edge from project A to a symbol in `design-system` is followed into the `design-system` graph
 
