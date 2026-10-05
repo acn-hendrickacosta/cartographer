@@ -8,6 +8,8 @@ Idempotent: all upserts are keyed on artifact identity.
 from __future__ import annotations
 
 import datetime
+import json
+import subprocess
 from pathlib import Path
 
 import typer
@@ -15,6 +17,7 @@ from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
 from cartographer import config as config_mod, registry
+from cartographer.artifact_id import artifact_id
 from cartographer.indexing import kg as kg_driver, vdb as vdb_driver
 from cartographer.indexing.central import get_central_kg, get_central_vdb
 from cartographer.indexing.vdb import ChunkRecord
@@ -133,6 +136,24 @@ def run(
         changed_node_ids = {n.id for n in all_nodes}
         all_edges = [e for e in all_edges if e.src in changed_node_ids]
 
+    # Rename detection: git diff since the last promoted SHA. Run before tombstone
+    # detection so renames are correctly separated from pure deletions — a renamed
+    # path gets a supersedes edge, not a plain tombstone.
+    rename_map: dict[str, str] = {}
+    last_sha = record.last_promoted_sha if record else ""
+    if last_sha:
+        try:
+            output = subprocess.check_output(
+                ["git", "diff", "--name-status", "--diff-filter=R", f"{last_sha}..HEAD"],
+                cwd=workspace, text=True,
+            )
+            for line in output.splitlines():
+                parts = line.split("\t")
+                if len(parts) == 3 and parts[0].startswith("R"):
+                    rename_map[parts[1]] = parts[2]
+        except Exception:
+            console.print("[yellow]  git rename detection unavailable; renames treated as delete + add[/yellow]")
+
     # Tombstone detection: paths previously promoted but absent from local VDB
     local_paths = {c.path for c in all_chunks}
     try:
@@ -140,7 +161,7 @@ def run(
     except Exception as exc:
         console.print(f"[yellow]warning: could not read global paths for tombstone detection: {exc}[/yellow]")
         global_paths = set()
-    deleted_paths = global_paths - local_paths
+    deleted_paths = (global_paths - local_paths) - set(rename_map.keys())
 
     console.print(f"  chunks:   {len(all_chunks)}")
     console.print(f"  nodes:    {len(all_nodes)}")
@@ -149,6 +170,10 @@ def run(
         console.print(f"  deleted:  {len(deleted_paths)} path(s) to tombstone")
         for p in sorted(deleted_paths):
             console.print(f"    - {p}")
+    if rename_map:
+        console.print(f"  renamed:  {len(rename_map)} path(s)")
+        for old_p, new_p in sorted(rename_map.items()):
+            console.print(f"    - {old_p} -> {new_p}")
 
     if dry_run:
         console.print("[yellow]--dry-run: no changes written[/yellow]")
@@ -190,6 +215,30 @@ def run(
             central_kg.upsert_edges(all_edges)
             progress.advance(edge_task, len(all_edges))
 
+    # Write supersedes edges + tombstone old paths for detected renames
+    if rename_map:
+        now = _now()
+        for old_path, new_path in rename_map.items():
+            try:
+                central_kg.upsert_edges([Edge(
+                    src=artifact_id(new_path),
+                    dst=artifact_id(old_path),
+                    type="supersedes",
+                    scope="global",
+                    attrs=json.dumps({"renamed_from": old_path, "renamed_at": now}),
+                )])
+            except Exception as exc:
+                console.print(f"[yellow]warning: failed to write supersedes edge for {old_path} -> {new_path}: {exc}[/yellow]")
+            try:
+                central_kg.set_tombstoned(old_path, now)
+            except Exception as exc:
+                console.print(f"[yellow]warning: failed to tombstone KG node {old_path}: {exc}[/yellow]")
+            try:
+                central_vdb.tombstone_path(project_id, old_path)
+            except Exception as exc:
+                console.print(f"[yellow]warning: failed to tombstone VDB path {old_path}: {exc}[/yellow]")
+        console.print(f"  renamed:    {len(rename_map)} path(s) linked via supersedes")
+
     # Write tombstone records for deleted paths
     if deleted_paths:
         now = _now()
@@ -204,9 +253,15 @@ def run(
                 console.print(f"[yellow]warning: failed to tombstone KG node {path}: {exc}[/yellow]")
         console.print(f"  tombstoned: {len(deleted_paths)} deleted path(s)")
 
-    # Update last_promoted_at in the registry
+    # Update last_promoted_at / last_promoted_sha in the registry
     if record:
         record.last_promoted_at = _now()
+        try:
+            record.last_promoted_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=workspace, text=True,
+            ).strip()
+        except Exception:
+            pass  # non-git repo or git unavailable; leave as previous value
         registry.upsert_project(record)
 
     console.print(f"  promoted: {len(all_chunks)} chunks, {len(all_nodes)} nodes, {len(all_edges)} edges")

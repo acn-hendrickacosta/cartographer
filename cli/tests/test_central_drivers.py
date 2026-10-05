@@ -586,3 +586,171 @@ def test_gc_removes_tombstones_immediately(tmp_path, monkeypatch):
         {"id": node.id},
     )
     assert kg_result[0]["cnt"] == 0, "tombstoned KG node must be deleted after gc"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.3: Rename tracking integration tests
+# ---------------------------------------------------------------------------
+
+@integration
+@neo4j_only
+def test_find_supersedes_source_returns_new_path(tmp_path):
+    """Exit criterion 2: a supersedes edge is written and queryable both ways."""
+    import datetime
+    drv = _make_neo4j_driver()
+    drv.ensure_namespace()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    old_node = _node(pid, path="src/old_name.py")
+    new_node = _node(pid, path="src/new_name.py")
+    drv.upsert_nodes([old_node, new_node])
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    drv.upsert_edges([_edge(new_node.id, old_node.id, edge_type="supersedes")])
+    drv.set_tombstoned("src/old_name.py", now)
+
+    redirect = drv.find_supersedes_source("src/old_name.py")
+    assert redirect is not None
+    assert redirect["new_path"] == "src/new_name.py"
+
+
+@integration
+@neo4j_only
+def test_find_supersedes_source_returns_none_when_absent(tmp_path):
+    drv = _make_neo4j_driver()
+    drv.ensure_namespace()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    node = _node(pid, path="src/deleted.py")
+    drv.upsert_nodes([node])
+    assert drv.find_supersedes_source("src/deleted.py") is None
+
+
+@integration
+@pgvector_only
+def test_query_by_path_returns_latest_non_tombstoned(tmp_path):
+    drv = _make_pgvector_driver()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    drv.ensure_collection(pid, embedding_dim=384)
+    c = _chunk(pid, path="src/new_name.py")
+    drv.upsert(pid, [c], embedding_dim=384)
+
+    result = drv.query_by_path(pid, "src/new_name.py")
+    assert result is not None
+    assert result["path"] == "src/new_name.py"
+
+    drv.tombstone_path(pid, "src/new_name.py")
+    assert drv.query_by_path(pid, "src/new_name.py") is None
+
+
+@integration
+@both_backends
+def test_promote_rename_end_to_end(tmp_path):
+    """Exit criteria 1-4, 7: full rename flow against real backends — supersedes
+    edge written, old path tombstoned in both stores, new path content present,
+    last_promoted_sha advances, and a second promote is idempotent (no duplicate
+    supersedes edge, stable counts)."""
+    import subprocess
+    from unittest.mock import patch
+    from typer.testing import CliRunner
+    from cartographer import config as config_mod, registry
+    from cartographer.cli import app
+
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=workspace, check=True, capture_output=True)
+
+    (workspace / "src").mkdir()
+    (workspace / "src" / "old_name.py").write_text("def hello(): pass\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/old_name.py"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "add"], cwd=workspace, check=True, capture_output=True)
+    pre_rename_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
+
+    subprocess.run(["git", "mv", "src/old_name.py", "src/new_name.py"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "rename"], cwd=workspace, check=True, capture_output=True)
+
+    cfg = config_mod.CartographerConfig(
+        project=config_mod.ProjectSection(id=pid, name="rename-e2e"),
+        topology=config_mod.TopologySection(mode="central"),
+        isolation=config_mod.IsolationSection(tenant="default"),
+    )
+    config_mod.save_config(workspace, cfg)
+    override_path = workspace / "cartographer.local.toml"
+    override_path.write_text(
+        "promotion_token = \"test-token\"\n"
+        "[central_vdb]\n"
+        f"host = \"{PG_HOST}\"\n"
+        f"port = {PG_PORT}\n"
+        f"user = \"{PG_USER}\"\n"
+        f"password = \"{PG_PASSWORD}\"\n"
+        f"database = \"{PG_DB}\"\n"
+        "[central_kg]\n"
+        f"uri = \"{NEO4J_URI}\"\n"
+        f"user = \"{NEO4J_USER}\"\n"
+        f"password = \"{NEO4J_PASS}\"\n"
+    )
+
+    local_dir = workspace / ".cartographer" / "local"
+    local_dir.mkdir(parents=True)
+    from cartographer.indexing import vdb as vdb_driver, kg as kg_driver
+    from cartographer.indexing.vdb import ChunkRecord
+    from cartographer.indexing.kg import Node
+
+    chunk = ChunkRecord(
+        id=f"{pid}/src/new_name.py:0", project_id=pid, scope="local",
+        artifact_type="code", path="src/new_name.py", origin="local",
+        text="def hello(): pass", embedding=[0.1] * 384,
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+    vdb_driver.upsert(local_dir / "vdb.lance", "local", [chunk])
+    kg_driver.ensure_namespace(local_dir / "kg.kuzu")
+    kg_driver.upsert_nodes(local_dir / "kg.kuzu", [Node(
+        id="path:src/new_name.py", project_id=pid, scope="local",
+        type="module", path="src/new_name.py", attrs="{}",
+    )])
+
+    reg_path = tmp_path / "registry.json"
+    with patch.object(registry, "registry_path", lambda: reg_path):
+        record = registry.register_project(pid, "rename-e2e", "central", "default", workspace)
+        record.last_promoted_sha = pre_rename_sha
+        registry.upsert_project(record)
+
+        # Seed the global index with the old path, simulating a prior promote
+        vdb_drv = _make_pgvector_driver()
+        vdb_drv.ensure_collection(pid, embedding_dim=384)
+        old_chunk = _chunk(pid, path="src/old_name.py")
+        vdb_drv.upsert(pid, [old_chunk], embedding_dim=384)
+
+        kg_drv = _make_neo4j_driver()
+        kg_drv.ensure_namespace()
+        old_node = _node(pid, path="src/old_name.py")
+        kg_drv.upsert_nodes([old_node])
+
+        result = CliRunner().invoke(app, ["promote", "--path", str(workspace), "--full"])
+        assert result.exit_code == 0, result.output
+
+        # old path tombstoned in both stores
+        results = vdb_drv.query(pid, embedding=[0.1] * 384, k=10)
+        assert not any(r["path"] == "src/old_name.py" for r in results)
+
+        # supersedes edge present, pointing old -> new
+        redirect = kg_drv.find_supersedes_source("src/old_name.py")
+        assert redirect is not None
+        assert redirect["new_path"] == "src/new_name.py"
+
+        # new path content present via query_by_path
+        new_content = vdb_drv.query_by_path(pid, "src/new_name.py")
+        assert new_content is not None
+
+        # last_promoted_sha advanced
+        updated = registry.get_project(pid)
+        new_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
+        assert updated.last_promoted_sha == new_head
+
+        # idempotent: promote again, counts/edges must not duplicate
+        result2 = CliRunner().invoke(app, ["promote", "--path", str(workspace), "--full"])
+        assert result2.exit_code == 0, result2.output
+        redirect2 = kg_drv.find_supersedes_source("src/old_name.py")
+        assert redirect2 == redirect

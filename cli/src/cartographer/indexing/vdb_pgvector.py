@@ -180,6 +180,30 @@ class PgvectorDriver:
         finally:
             conn.close()
 
+    def query_by_path(self, project_id: str, path: str) -> dict[str, Any] | None:
+        """Fetch the most recent non-tombstoned chunk for a specific path."""
+        table = _table_name(project_id)
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT id, project_id, scope, artifact_type, path,
+                           symbol, spec_id, origin, text, updated_at
+                    FROM {table}
+                    WHERE path = %s AND is_tombstone = FALSE
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                """, (path,))
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                cols = [d[0] for d in cur.description]
+                return dict(zip(cols, row))
+        except Exception:
+            return None
+        finally:
+            conn.close()
+
     def collection_stats(self, project_id: str) -> dict[str, int]:
         table = _table_name(project_id)
         conn = self._connect()

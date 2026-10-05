@@ -12,6 +12,7 @@ Edge type:   RELATES_TO  (with `type` property carrying the semantic edge type)
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from cartographer.indexing.kg import Edge, Node
@@ -107,6 +108,23 @@ class Neo4jDriver:
                 )
         finally:
             drv.close()
+
+    def find_supersedes_source(self, old_path: str) -> dict | None:
+        """If a `supersedes` edge points at the node for old_path, return
+        {new_path, renamed_at}. Else None — either old_path was never renamed,
+        or it was a pure deletion."""
+        rows = self.query(
+            "MATCH (new:Artifact)-[r:RELATES_TO {type: 'supersedes'}]->(old:Artifact {path: $path}) "
+            "RETURN new.path AS new_path, r.attrs AS attrs LIMIT 1",
+            {"path": old_path},
+        )
+        if not rows:
+            return None
+        try:
+            attrs = json.loads(rows[0].get("attrs") or "{}")
+        except Exception:
+            attrs = {}
+        return {"new_path": rows[0]["new_path"], "renamed_at": attrs.get("renamed_at", "")}
 
     def neighbors(self, node_id: str, depth: int = 1, scope: str | None = None) -> list[dict]:
         depth = max(1, min(depth, 4))

@@ -425,3 +425,81 @@ def test_tombstone_filter_does_not_exclude_live_results(tmp_path, monkeypatch):
         f"Live global result must appear in output:\n{result.output}"
     )
     assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# 9. Rename redirect: tombstoned KG hit with a supersedes edge is substituted
+# ---------------------------------------------------------------------------
+
+def test_rename_redirect_substitutes_new_path(tmp_path, monkeypatch):
+    """A tombstoned central KG hit with a supersedes edge must be replaced by
+    the new path's content, tagged as renamed — not shown as the old path."""
+    workspace = _setup_project(tmp_path, "proj_central_010", topology="central")
+
+    reg_path = tmp_path / "registry.json"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg_path)
+    registry.register_project("proj_central_010", "proj", "central", "default", workspace)
+
+    mock_central_kg = MagicMock()
+    mock_central_kg.is_reachable.return_value = True
+    mock_central_kg.query.return_value = [{
+        "id": "path:src/old_name.py", "type": "module", "path": "src/old_name.py",
+        "tombstoned_at": "2026-01-01T00:00:00+00:00",
+    }]
+    mock_central_kg.find_supersedes_source.return_value = {
+        "new_path": "src/new_name.py", "renamed_at": "2026-01-01T00:00:00+00:00",
+    }
+
+    mock_central_vdb = MagicMock()
+    mock_central_vdb.is_reachable.return_value = True
+    mock_central_vdb.query_by_path.return_value = {
+        "path": "src/new_name.py", "text": "def hello(): pass", "artifact_type": "code",
+    }
+    mock_central_vdb.query.return_value = []
+
+    with patch("cartographer.indexing.central.get_central_kg", return_value=mock_central_kg), \
+         patch("cartographer.indexing.central.get_central_vdb", return_value=mock_central_vdb), \
+         patch("cartographer.indexing.kg.query", return_value=[]), \
+         patch("fastembed.TextEmbedding") as mock_embed:
+        mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
+        result = _invoke(workspace, query="old_name")
+
+    assert result.exit_code == 0
+    mock_central_kg.find_supersedes_source.assert_called_once_with("src/old_name.py")
+    mock_central_vdb.query_by_path.assert_called_once_with("proj_central_010", "src/new_name.py")
+    assert "src/old_name.py -> src/new_name.py" in result.output
+    assert "renamed" in result.output
+
+
+def test_tombstoned_without_supersedes_is_excluded(tmp_path, monkeypatch):
+    """A tombstoned central KG hit with NO supersedes edge is a pure deletion —
+    it must not appear in output at all, substituted or otherwise."""
+    workspace = _setup_project(tmp_path, "proj_central_011", topology="central")
+
+    reg_path = tmp_path / "registry.json"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg_path)
+    registry.register_project("proj_central_011", "proj", "central", "default", workspace)
+
+    mock_central_kg = MagicMock()
+    mock_central_kg.is_reachable.return_value = True
+    mock_central_kg.query.return_value = [{
+        "id": "path:src/deleted.py", "type": "module", "path": "src/deleted.py",
+        "tombstoned_at": "2026-01-01T00:00:00+00:00",
+    }]
+    mock_central_kg.find_supersedes_source.return_value = None
+
+    mock_central_vdb = MagicMock()
+    mock_central_vdb.is_reachable.return_value = True
+    mock_central_vdb.query.return_value = []
+
+    with patch("cartographer.indexing.central.get_central_kg", return_value=mock_central_kg), \
+         patch("cartographer.indexing.central.get_central_vdb", return_value=mock_central_vdb), \
+         patch("cartographer.indexing.kg.query", return_value=[]), \
+         patch("fastembed.TextEmbedding") as mock_embed:
+        mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
+        result = _invoke(workspace, query="deleted")
+
+    assert result.exit_code == 0
+    mock_central_kg.find_supersedes_source.assert_called_once_with("src/deleted.py")
+    mock_central_vdb.query_by_path.assert_not_called()
+    assert "src/deleted.py" not in result.output

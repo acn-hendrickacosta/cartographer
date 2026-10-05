@@ -50,7 +50,38 @@ def run(
     )
     console.print(f"KG matches (origin=local): {len(kg_hits)}")
     for hit in kg_hits[:10]:
-        console.print(f"  - [{hit['type']}] {hit['path']}")
+        console.print(f"  - [{hit['type']}] {hit['path']}", markup=False)
+
+    if cfg.topology.mode == "central":
+        try:
+            from cartographer.indexing.central import get_central_kg, get_central_vdb
+            override = config_mod.load_local_override(workspace)
+            central_kg = get_central_kg(cfg, override)
+            if central_kg.is_reachable():
+                central_kg_hits = central_kg.query(
+                    "MATCH (a:Artifact) WHERE a.path CONTAINS $q OR a.attrs CONTAINS $q "
+                    "RETURN a.id AS id, a.type AS type, a.path AS path, a.tombstoned_at AS tombstoned_at LIMIT 20",
+                    {"q": query},
+                )
+                console.print(f"KG matches (origin=global): {len(central_kg_hits)}")
+                for hit in central_kg_hits[:10]:
+                    if hit.get("tombstoned_at"):
+                        redirect = central_kg.find_supersedes_source(hit["path"])
+                        if redirect:
+                            central_vdb = get_central_vdb(cfg, override)
+                            new_content = central_vdb.query_by_path(cfg.project.id, redirect["new_path"])
+                            if new_content:
+                                console.print(
+                                    f"  - [{hit['type']}|renamed] {hit['path']} -> {redirect['new_path']}",
+                                    markup=False,
+                                )
+                        # tombstoned with no supersedes edge is a pure deletion — excluded
+                        continue
+                    console.print(f"  - [{hit['type']}] {hit['path']}", markup=False)
+            else:
+                console.print("[yellow]central KG unreachable — showing local KG results only[/yellow]")
+        except Exception:
+            console.print("[yellow]central KG unavailable — showing local KG results only[/yellow]")
 
     try:
         from fastembed import TextEmbedding
