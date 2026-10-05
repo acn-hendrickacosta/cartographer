@@ -41,7 +41,7 @@ app.command("promote")(promote.run)
 app.command("recall")(recall.run)
 app.command("ui")(ui_cmd.run)
 app.command("doctor")(doctor.run)
-app.command("serve")(serve.run)
+app.add_typer(serve.app, name="serve")
 app.command("gc")(gc.run)
 
 

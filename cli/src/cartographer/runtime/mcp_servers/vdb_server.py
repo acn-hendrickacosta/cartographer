@@ -163,6 +163,12 @@ def vdb_stats(workspace: str = "") -> str:
         return json.dumps({"error": str(exc)})
 
 
+async def _health(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse({"status": "ok", "pid": os.getpid()})
+
+
 def _run_http(port: int) -> None:
     """Run as a persistent HTTP server with per-request workspace routing."""
     import uvicorn
@@ -179,6 +185,7 @@ def _run_http(port: int) -> None:
 
     app = mcp.streamable_http_app()
     app.add_middleware(WorkspaceMiddleware)
+    app.add_route("/health", _health, methods=["GET"])
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 

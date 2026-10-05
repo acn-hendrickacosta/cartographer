@@ -11,6 +11,7 @@ from rich.console import Console
 from cartographer import config as config_mod
 from cartographer.indexing import kg, vdb
 from cartographer.ingestion import parsers as parser_registry
+from cartographer.runtime import serve_state
 
 console = Console()
 
@@ -78,6 +79,20 @@ def run(
             console.print(f"[yellow]INFO[/yellow] central KG: {exc}")
         except ImportError:
             console.print("[yellow]INFO[/yellow] central KG: neo4j not installed; run: pip install 'cartographer[central]'")
+
+    serve = serve_state.current_running_state()
+    if serve is not None:
+        kg_health = serve_state.check_health(serve.kg_port)
+        watching = bool((kg_health or {}).get("watch"))
+        console.print(
+            f"[green]OK[/green]   cartographer serve is running (pid {serve.pid}, "
+            f"{'watching' if watching else 'not watching'})"
+        )
+    else:
+        console.print(
+            "[yellow]INFO[/yellow] cartographer serve is not running — "
+            "local index will not auto-update on file changes"
+        )
 
     mcp_path = workspace / ".mcp.json"
     mcp_wired = False
