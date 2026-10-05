@@ -181,25 +181,35 @@ exclude_patterns = [
 
 
 # ---------------------------------------------------------------------------
-# Recall
+# Retrieval
 # ---------------------------------------------------------------------------
+#
+# Note: this section was previously (and incorrectly) documented here as
+# [recall], with different field names (preload_budget_tokens,
+# per_turn_budget_tokens, top_k_vdb, kg_neighborhood_depth). cartographer's
+# config loader only ever read [retrieval] — that section was never actually
+# parsed. Corrected as part of Phase 3.4; docs/CONFIGURATION.md and a few
+# other docs still have the stale [recall] version as of this writing.
 
-[recall]
+[retrieval]
 
 # Maximum tokens the SessionStart (preload) hook may inject into context.
 # Increase for richer session context; reduce if you hit context length limits.
-preload_budget_tokens = 1500
+preload_tokens = 2000
 
 # Maximum tokens the UserPromptSubmit (per-turn) hook may inject into context.
-per_turn_budget_tokens = 800
+per_turn_tokens = 1000
 
 # Number of VDB chunks to retrieve per query in the recall hooks.
-top_k_vdb = 8
+top_k = 8
 
-# KG neighborhood traversal depth in recall queries.
-# Depth 2 returns direct neighbors and their neighbors.
-# Increase with caution: depth 3+ can return very large result sets on dense graphs.
-kg_neighborhood_depth = 2
+# Seconds of updated_at difference between local and global versions of the
+# same artifact before a conflict notice is shown. 0 = any difference counts.
+conflict_threshold_seconds = 0
+
+# Set false to suppress conflict notices. The local version is still returned
+# either way — conflict detection never blocks a read, it is informational.
+conflict_notice = true
 
 
 # ---------------------------------------------------------------------------

@@ -55,7 +55,22 @@ class RetrievalSection(BaseModel):
 
 ### Conflict detection at merge step
 
-The merge step already exists in all three recall paths. Add conflict detection after building `merged`:
+**Corrected during implementation (2026-10-05), before this phase was built —
+see the note below the original sketch.**
+
+The original sketch below built `global_by_path` from `global_hits` — the
+top-k *vector similarity* results for the current query. That is wrong: a
+local hit's same-path global counterpart only appears in `global_hits` if it
+*also* happens to rank in the top-k semantic matches for this specific query.
+That holds for a trivial local edit (embedding barely moves) but silently
+fails to detect a conflict for exactly the case this feature exists for — a
+local version that has diverged significantly from the promoted one, whose
+embedding has therefore also diverged enough to drop out of the top-k
+entirely. The exit-criteria test as originally written (a small, deliberate
+local edit) would not have caught this, since a small edit is exactly the
+case where incidental top-k overlap still holds.
+
+**Original sketch (do not implement this way):**
 
 ```python
 def _detect_conflict(local_hit: dict, global_hit: dict, threshold_seconds: int) -> bool:
@@ -74,7 +89,8 @@ def _detect_conflict(local_hit: dict, global_hit: dict, threshold_seconds: int) 
         return False
 
 
-# At merge time — build an index of global hits by path for O(1) lookup
+# WRONG: global_hits is a top-k similarity result, not a path index — a
+# diverged local hit's counterpart may simply not be in this list at all.
 global_by_path = {h.get("path"): h for h in global_hits}
 
 conflict_notices: list[str] = []
@@ -82,15 +98,71 @@ for hit in local_hits:
     path = hit.get("path")
     global_hit = global_by_path.get(path)
     if global_hit and _detect_conflict(hit, global_hit, cfg.retrieval.conflict_threshold_seconds):
-        local_ts = hit.get("updated_at", "unknown")
-        global_ts = global_hit.get("updated_at", "unknown")
-        conflict_notices.append(
-            f"⚠ CONFLICT: {path}\n"
-            f"  Local:  updated {local_ts} (your working copy)\n"
-            f"  Global: updated {global_ts} (last promoted by another developer)\n"
-            f"  Showing local. Run 'cartographer promote' after merging to resolve."
-        )
+        ...
 ```
+
+**Corrected approach:** for each local hit, look the same path up directly in
+the global index via `PgvectorDriver.query_by_path(project_id, path)` — the
+exact-path lookup Phase 3.3 already built for rename redirects — instead of
+relying on incidental top-k overlap. This guarantees the comparison happens
+regardless of how far the content has drifted, and reuses existing
+infrastructure rather than adding new surface area. Lives in a new shared
+module, `cartographer/conflict.py`, since the same logic is needed in three
+call sites (`recall.py`, `session_start.py`, `user_prompt_submit.py`):
+
+```python
+# cartographer/conflict.py
+from datetime import datetime
+
+def _is_conflict(local_ts: str, global_ts: str, threshold_seconds: int) -> bool:
+    if not local_ts or not global_ts or local_ts == global_ts:
+        return False
+    if threshold_seconds == 0:
+        return True
+    try:
+        local_dt = datetime.fromisoformat(local_ts)
+        global_dt = datetime.fromisoformat(global_ts)
+        return abs((local_dt - global_dt).total_seconds()) > threshold_seconds
+    except Exception:
+        return False
+
+
+def _notice(path: str, local_ts: str, global_ts: str) -> str:
+    return (
+        f"⚠ CONFLICT: {path}\n"
+        f"  Local:  updated {local_ts} (your working copy)\n"
+        f"  Global: updated {global_ts} (last promoted by another developer)\n"
+        f"  Showing local. Run 'cartographer promote' after merging to resolve."
+    )
+
+
+def detect_conflicts(local_hits, central_vdb, project_id: str, threshold_seconds: int) -> list[str]:
+    """central_vdb may be None (local topology, or central unreachable) — returns []."""
+    if central_vdb is None:
+        return []
+    notices = []
+    for hit in local_hits:
+        path = hit.get("path")
+        if not path:
+            continue
+        try:
+            global_hit = central_vdb.query_by_path(project_id, path)
+        except Exception:
+            continue
+        if not global_hit:
+            continue
+        local_ts, global_ts = hit.get("updated_at", ""), global_hit.get("updated_at", "")
+        if _is_conflict(local_ts, global_ts, threshold_seconds):
+            notices.append(_notice(path, local_ts or "unknown", global_ts or "unknown"))
+    return notices
+```
+
+Each call site retains a handle to the constructed `central_vdb` driver
+(`None` when topology is local or the central backend is unreachable) and
+passes it to `detect_conflicts` alongside `local_hits` — no change to how
+`global_hits` (the similarity results actually shown to the user) are
+computed; this only affects conflict *detection*, which is a separate,
+additional lookup.
 
 ### Output format
 

@@ -97,12 +97,14 @@ def run(
     local_hits = vdb.query(local_dir / "vdb.lance", scope="local", embedding=embedding, k=k)
 
     global_hits: list[dict] = []
+    central_vdb_handle = None
     if cfg.topology.mode == "central":
         try:
             from cartographer.indexing.central import get_central_vdb
             override = config_mod.load_local_override(workspace)
             central_vdb = get_central_vdb(cfg, override)
             if central_vdb.is_reachable():
+                central_vdb_handle = central_vdb
                 global_hits = central_vdb.query(cfg.project.id, embedding=embedding, k=k, where="is_tombstone = FALSE")
                 for h in global_hits:
                     h["origin"] = "global"
@@ -110,6 +112,11 @@ def run(
                 console.print("[yellow]central index unreachable — showing local results only[/yellow]")
         except Exception:
             console.print("[yellow]central index unavailable — showing local results only[/yellow]")
+
+    if cfg.retrieval.conflict_notice:
+        from cartographer.conflict import detect_conflicts
+        for notice in detect_conflicts(local_hits, central_vdb_handle, cfg.project.id, cfg.retrieval.conflict_threshold_seconds):
+            console.print(f"[yellow]{notice}[/yellow]")
 
     local_paths = {h.get("path") for h in local_hits}
     merged = list(local_hits) + [h for h in global_hits if h.get("path") not in local_paths]

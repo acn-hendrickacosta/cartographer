@@ -30,6 +30,8 @@ class RetrievalSection(BaseModel):
     preload_tokens: int = 2000
     per_turn_tokens: int = 1000
     top_k: int = 8
+    conflict_threshold_seconds: int = 0  # 0 = any updated_at difference counts as conflict
+    conflict_notice: bool = True  # set False to suppress notices (local is still returned)
 
 
 class BackendDriver(BaseModel):

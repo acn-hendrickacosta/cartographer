@@ -40,12 +40,16 @@ from cartographer import config as config_mod, registry
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _write_config(workspace: Path, project_id: str, topology: str = "local", tenant: str = "default") -> None:
+def _write_config(
+    workspace: Path, project_id: str, topology: str = "local", tenant: str = "default",
+    conflict_notice: bool = True,
+) -> None:
     workspace.mkdir(parents=True, exist_ok=True)
     cfg = config_mod.CartographerConfig(
         project=config_mod.ProjectSection(id=project_id, name=f"project-{project_id}"),
         topology=config_mod.TopologySection(mode=topology),
         isolation=config_mod.IsolationSection(tenant=tenant),
+        retrieval=config_mod.RetrievalSection(conflict_notice=conflict_notice),
     )
     config_mod.save_config(workspace, cfg)
 
@@ -64,9 +68,12 @@ def _invoke(workspace: Path, query: str = "test query") -> "Result":
     return CliRunner().invoke(app, ["recall", query, "--path", str(workspace)])
 
 
-def _setup_project(tmp_path: Path, project_id: str, topology: str, tenant: str = "default") -> Path:
+def _setup_project(
+    tmp_path: Path, project_id: str, topology: str, tenant: str = "default",
+    conflict_notice: bool = True,
+) -> Path:
     workspace = tmp_path / "proj"
-    _write_config(workspace, project_id, topology=topology, tenant=tenant)
+    _write_config(workspace, project_id, topology=topology, tenant=tenant, conflict_notice=conflict_notice)
     (workspace / ".cartographer" / "local").mkdir(parents=True, exist_ok=True)
     return workspace
 
@@ -503,3 +510,109 @@ def test_tombstoned_without_supersedes_is_excluded(tmp_path, monkeypatch):
     mock_central_kg.find_supersedes_source.assert_called_once_with("src/deleted.py")
     mock_central_vdb.query_by_path.assert_not_called()
     assert "src/deleted.py" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# 10. Conflict notice: recall surfaces divergent local/global updated_at
+# ---------------------------------------------------------------------------
+
+def test_conflict_notice_appears_before_artifact_content(tmp_path, monkeypatch):
+    """A local hit whose path exists globally with a different updated_at must
+    produce a CONFLICT notice, printed before the VDB matches section."""
+    workspace = _setup_project(tmp_path, "proj_central_012", topology="central")
+
+    reg_path = tmp_path / "registry.json"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg_path)
+    registry.register_project("proj_central_012", "proj", "central", "default", workspace)
+
+    mock_central_vdb = MagicMock()
+    mock_central_vdb.is_reachable.return_value = True
+    mock_central_vdb.query.return_value = []
+    mock_central_vdb.query_by_path.return_value = {
+        "path": "src/drifted.py", "updated_at": "2020-01-01T00:00:00",
+    }
+
+    mock_central_kg = MagicMock()
+    mock_central_kg.is_reachable.return_value = True
+    mock_central_kg.query.return_value = []
+
+    local_hit = {"path": "src/drifted.py", "text": "local content body", "score": 0.9,
+                 "artifact_type": "code", "updated_at": "2026-01-01T00:00:00"}
+
+    with patch("cartographer.indexing.central.get_central_vdb", return_value=mock_central_vdb), \
+         patch("cartographer.indexing.central.get_central_kg", return_value=mock_central_kg), \
+         patch("cartographer.indexing.vdb.query", return_value=[local_hit]), \
+         patch("cartographer.indexing.kg.query", return_value=[]), \
+         patch("fastembed.TextEmbedding") as mock_embed:
+        mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
+        result = _invoke(workspace)
+
+    assert result.exit_code == 0
+    mock_central_vdb.query_by_path.assert_called_once_with("proj_central_012", "src/drifted.py")
+    assert "CONFLICT" in result.output
+    assert "src/drifted.py" in result.output
+
+    conflict_pos = result.output.find("CONFLICT")
+    vdb_matches_pos = result.output.find("VDB matches:")
+    assert conflict_pos != -1 and vdb_matches_pos != -1
+    assert conflict_pos < vdb_matches_pos, "conflict notice must appear before the VDB matches section"
+
+
+def test_conflict_notice_suppressed_by_config(tmp_path, monkeypatch):
+    """conflict_notice=False must suppress the notice without affecting the
+    central query_by_path call being skipped entirely (no need to even look)."""
+    workspace = _setup_project(tmp_path, "proj_central_013", topology="central", conflict_notice=False)
+
+    reg_path = tmp_path / "registry.json"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg_path)
+    registry.register_project("proj_central_013", "proj", "central", "default", workspace)
+
+    mock_central_vdb = MagicMock()
+    mock_central_vdb.is_reachable.return_value = True
+    mock_central_vdb.query.return_value = []
+
+    mock_central_kg = MagicMock()
+    mock_central_kg.is_reachable.return_value = True
+    mock_central_kg.query.return_value = []
+
+    local_hit = {"path": "src/drifted.py", "text": "local content body", "score": 0.9,
+                 "artifact_type": "code", "updated_at": "2026-01-01T00:00:00"}
+
+    with patch("cartographer.indexing.central.get_central_vdb", return_value=mock_central_vdb), \
+         patch("cartographer.indexing.central.get_central_kg", return_value=mock_central_kg), \
+         patch("cartographer.indexing.vdb.query", return_value=[local_hit]), \
+         patch("cartographer.indexing.kg.query", return_value=[]), \
+         patch("fastembed.TextEmbedding") as mock_embed:
+        mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
+        result = _invoke(workspace)
+
+    assert result.exit_code == 0
+    assert "CONFLICT" not in result.output
+    mock_central_vdb.query_by_path.assert_not_called()
+    # local content must still be returned regardless of notice suppression
+    assert "src/drifted.py" in result.output
+
+
+def test_no_conflict_notice_in_local_topology(tmp_path, monkeypatch):
+    """Conflict detection must not fire in local-only topology — there is no
+    global index to diverge from, and no central driver should be touched."""
+    workspace = _setup_project(tmp_path, "proj_local_002", topology="local")
+
+    reg_path = tmp_path / "registry.json"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg_path)
+    registry.register_project("proj_local_002", "proj", "local", "default", workspace)
+
+    get_central_vdb = MagicMock()
+    local_hit = {"path": "src/a.py", "text": "local content body", "score": 0.9,
+                 "artifact_type": "code", "updated_at": "2026-01-01T00:00:00"}
+
+    with patch("cartographer.indexing.central.get_central_vdb", get_central_vdb), \
+         patch("cartographer.indexing.vdb.query", return_value=[local_hit]), \
+         patch("cartographer.indexing.kg.query", return_value=[]), \
+         patch("fastembed.TextEmbedding") as mock_embed:
+        mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
+        result = _invoke(workspace)
+
+    assert result.exit_code == 0
+    assert "CONFLICT" not in result.output
+    get_central_vdb.assert_not_called()

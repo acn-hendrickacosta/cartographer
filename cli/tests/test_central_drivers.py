@@ -754,3 +754,75 @@ def test_promote_rename_end_to_end(tmp_path):
         assert result2.exit_code == 0, result2.output
         redirect2 = kg_drv.find_supersedes_source("src/old_name.py")
         assert redirect2 == redirect
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.4: Conflict detection integration test
+# ---------------------------------------------------------------------------
+
+@integration
+@pgvector_only
+def test_conflict_detected_end_to_end_via_recall(tmp_path, monkeypatch):
+    """Developer A promotes a file; Developer B edits it locally without
+    promoting; Developer B's recall must show a CONFLICT notice. After
+    Developer B also promotes (timestamps now match), the notice disappears."""
+    from typer.testing import CliRunner
+    from unittest.mock import patch
+    from cartographer import config as config_mod, registry
+    from cartographer.cli import app
+    from cartographer.indexing import vdb as vdb_driver
+    from cartographer.indexing.vdb import ChunkRecord
+
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+    vdb_drv = _make_pgvector_driver()
+    vdb_drv.ensure_collection(pid, embedding_dim=384)
+
+    # Developer A's promoted (global) version
+    global_chunk = _chunk(pid, path="src/shared.py")
+    vdb_drv.upsert(pid, [global_chunk], embedding_dim=384)
+
+    # Developer B's local workspace, with a locally-edited (newer) version
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    cfg = config_mod.CartographerConfig(
+        project=config_mod.ProjectSection(id=pid, name="conflict-e2e"),
+        topology=config_mod.TopologySection(mode="central"),
+        isolation=config_mod.IsolationSection(tenant="default"),
+    )
+    config_mod.save_config(workspace, cfg)
+
+    local_dir = workspace / ".cartographer" / "local"
+    local_dir.mkdir(parents=True)
+    local_chunk = ChunkRecord(
+        id=f"{pid}/src/shared.py:0", project_id=pid, scope="local",
+        artifact_type="code", path="src/shared.py", origin="local",
+        text="def login(): return True  # locally edited", embedding=[0.1] * 384,
+        updated_at="2026-06-01T00:00:00+00:00",
+    )
+    vdb_driver.upsert(local_dir / "vdb.lance", "local", [local_chunk])
+    from cartographer.indexing import kg as kg_driver
+    kg_driver.ensure_namespace(local_dir / "kg.kuzu")
+
+    reg_path = tmp_path / "registry.json"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg_path)
+    registry.register_project(pid, "conflict-e2e", "central", "default", workspace)
+
+    with patch("cartographer.indexing.central.get_central_vdb", return_value=vdb_drv), \
+         patch("fastembed.TextEmbedding") as mock_embed:
+        mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
+        result = CliRunner().invoke(app, ["recall", "login", "--path", str(workspace)])
+
+    assert result.exit_code == 0, result.output
+    assert "CONFLICT" in result.output
+    assert "src/shared.py" in result.output
+
+    # Developer B promotes — global now matches local exactly (same updated_at)
+    vdb_drv.upsert(pid, [ChunkRecord(**{**local_chunk.model_dump()})], embedding_dim=384)
+
+    with patch("cartographer.indexing.central.get_central_vdb", return_value=vdb_drv), \
+         patch("fastembed.TextEmbedding") as mock_embed:
+        mock_embed.return_value.embed.return_value = iter([[0.1] * 384])
+        result2 = CliRunner().invoke(app, ["recall", "login", "--path", str(workspace)])
+
+    assert result2.exit_code == 0, result2.output
+    assert "CONFLICT" not in result2.output
