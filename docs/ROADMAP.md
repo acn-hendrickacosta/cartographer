@@ -121,6 +121,8 @@ Phase 3 does not start until Phase 2 is stable in production use.
 
 See each sub-phase document for detailed criteria. Phase 3 is complete when all four sub-phases pass and the Phase 2 two-developer walkthrough passes without regression.
 
+**Status as of 2026-10-05:** All sub-phases (3.1, 3.1.1, 3.1.2, 3.2, 3.2.1, 3.3, 3.4) are code-complete, each with exit criteria verified by automated tests (unit + integration against a live pgvector+Neo4j backend). The sole remaining gate for closing Phase 3 is the Phase 2 two-developer walkthrough (`docs/runbooks/two-developer-walkthrough.md`), still pending since Phase 2 — not newly introduced by Phase 3.
+
 ---
 
 ## Standards distribution track

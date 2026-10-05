@@ -1,5 +1,9 @@
 # Phase 3.4: Conflict Resolution — Surface Divergence in Recall Context
 
+**Status:** Code complete as of 2026-10-05. All exit criteria verified except #8 (Phase 2's two-developer walkthrough, a standing manual exercise deferred since Phase 2 itself — not newly closeable by this phase). 195 unit tests passing (17 new) plus 30 integration tests against a live pgvector+Neo4j backend, including a full two-developer conflict-then-resolve scenario. The conflict-detection design in this doc's original draft relied on incidental top-k similarity overlap to find a local hit's global counterpart — corrected during implementation to an explicit per-path lookup; see the note under "Conflict detection at merge step" below.
+
+All four Phase 3 sub-phases (3.1, 3.1.1, 3.1.2, 3.2, 3.2.1, 3.3, 3.4) are now code-complete. Per ROADMAP.md, Phase 3 as a whole still awaits the Phase 2 two-developer walkthrough before it can be marked closed.
+
 ## Goal
 
 When a developer's local version of an artifact diverges from the version in the global index (a different developer promoted a different version), a conflict notice is injected into Claude's recall context. Claude is informed of the divergence and attributes its answer to the local version explicitly. The developer is not blocked — local always wins for reads.
