@@ -125,6 +125,16 @@ See each sub-phase document for detailed criteria. Phase 3 is complete when all 
 
 ---
 
+## Phase 4: Enterprise scale
+
+**Goal:** Multiple teams sharing a central backend, graphs that stay fresh without manual intervention, cross-project impact analysis, and governed relationship taxonomies. See [phase-4-enterprise.md](phases/phase-4-enterprise.md) for the full component breakdown, scope, and exit criteria.
+
+**Entry condition (per the phase doc):** Phase 3 complete and stable in production over a full release cycle. **Explicitly overridden for the 2026-10-05 work below** — this is a solo/small-team project, not an org waiting on a release cycle; the gate was treated as advisory, by explicit decision, not satisfied by actual production use.
+
+**Status as of 2026-10-05:** 6 of 7 components implemented and tested (unit + integration against live pgvector+Neo4j) — `kg_impact`, edge taxonomy governance, `seed`/`promote --diff`, graph versioning, CI templates, `kg_search`. **RBAC deliberately deferred**, by explicit decision before starting — it has its own required design spike (`docs/phases/phase-4-protocols/rbac-token-protocol.md`, not yet written) and this phase has no hard dependency on it for the other 6. Not yet done: the RBAC design spike and implementation itself, and the exit criteria that specifically depend on it (team-token scoping, `PERMISSION_DENIED` enforcement).
+
+---
+
 ## Standards distribution track
 
 This track runs independently of the phases above. It is a packaging and authoring concern, not a KG/VDB concern.
