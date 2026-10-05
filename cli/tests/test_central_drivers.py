@@ -897,3 +897,31 @@ def test_record_and_list_promotions(tmp_path):
     assert rows[0]["commit_sha"] == "sha2sha2"  # most recent first
     assert rows[1]["commit_sha"] == "sha1sha1"
     assert rows[0]["node_count"] == 15
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: federated overlays — find_impact project_id isolation/fan-out
+# ---------------------------------------------------------------------------
+
+@integration
+@neo4j_only
+def test_find_impact_isolated_by_project_by_default_with_explicit_list(tmp_path):
+    drv = _make_neo4j_driver()
+    drv.ensure_namespace()
+    pid_a = f"test_{uuid.uuid4().hex[:8]}"
+    pid_b = f"test_{uuid.uuid4().hex[:8]}"
+
+    target = _node(pid_a, path="shared.py")
+    dep_a = _node(pid_a, path="consumer_a.py")
+    dep_b = _node(pid_b, path="consumer_b.py")
+    drv.upsert_nodes([target, dep_a, dep_b])
+    drv.upsert_edges([
+        _edge(dep_a.id, target.id, edge_type="imports"),
+        _edge(dep_b.id, target.id, edge_type="imports"),
+    ])
+
+    restricted = drv.find_impact(target.id, depth=4, edge_types=["imports"], project_ids=[pid_a])
+    assert {r["path"] for r in restricted} == {"consumer_a.py"}
+
+    overlay = drv.find_impact(target.id, depth=4, edge_types=["imports"], project_ids=[pid_a, pid_b])
+    assert {r["path"] for r in overlay} == {"consumer_a.py", "consumer_b.py"}

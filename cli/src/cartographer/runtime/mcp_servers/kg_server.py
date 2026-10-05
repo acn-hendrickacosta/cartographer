@@ -222,7 +222,13 @@ def kg_impact(
         central_kg = get_central_kg(cfg, override)
         if not central_kg.is_reachable():
             return json.dumps({"error": "central KG (Neo4j) is not reachable"})
-        rows = central_kg.find_impact(node_id, depth=depth, edge_types=types)
+        # Federated overlays: this project's own data plus any projects it has
+        # explicitly opted into reading (cfg.federation.global_overlays).
+        # Every promoted project shares one physical Neo4j graph with no
+        # structural partitioning, so this is the isolation boundary, not an
+        # optional extra.
+        allowed_projects = [cfg.project.id, *cfg.federation.global_overlays]
+        rows = central_kg.find_impact(node_id, depth=depth, edge_types=types, project_ids=allowed_projects)
         return json.dumps({"node_id": node_id, "scope": "global", "impact": rows}, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)})

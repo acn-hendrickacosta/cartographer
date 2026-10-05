@@ -142,25 +142,46 @@ class Neo4jDriver:
             params["scope"] = scope
         return self.query(cypher, params)
 
-    def find_impact(self, node_id: str, depth: int = 4, edge_types: list[str] | None = None) -> list[dict]:
+    def find_impact(
+        self,
+        node_id: str,
+        depth: int = 4,
+        edge_types: list[str] | None = None,
+        project_ids: list[str] | None = None,
+    ) -> list[dict]:
         """Phase 4: reverse traversal across the global graph — everything
         that transitively depends on node_id via the given edge types
         (default: calls, imports, extends), excluding tombstoned dependents.
-        Answers "what breaks if I change this?" across every promoted
-        project. Neo4j's Cypher binder has no issue with a list parameter
-        inside ALL(...) over a variable-length path (unlike Kuzu's — see
-        kg.py's impact() for the local-scope equivalent and its workaround)."""
+        Answers "what breaks if I change this?" across promoted projects.
+        Neo4j's Cypher binder has no issue with a list parameter inside
+        ALL(...) over a variable-length path (unlike Kuzu's — see kg.py's
+        impact() for the local-scope equivalent and its workaround).
+
+        project_ids restricts which projects' dependents are returned
+        (Phase 4 federated overlays: a project's own id plus any configured
+        global_overlays). Every project promoted into this backend shares one
+        physical Neo4j graph with no structural partitioning — without this
+        filter, any project could see every other project's dependents with
+        no isolation at all. Pass None only when you specifically want
+        unrestricted cross-project results (e.g. an admin tool); kg_server.py's
+        kg_impact tool always passes a concrete list for scope="global".
+        """
         depth = max(1, min(depth, 6))
         types = edge_types or ["calls", "imports", "extends"]
+        project_filter = "AND dependent.project_id IN $project_ids " if project_ids is not None else ""
         cypher = (
             f"MATCH p = (dependent:Artifact)-[r:RELATES_TO*1..{depth}]->(target:Artifact {{id: $node_id}}) "
             "WHERE ALL(rel IN r WHERE rel.type IN $edge_types) "
             "AND (dependent.tombstoned_at IS NULL OR dependent.tombstoned_at = '') "
+            f"{project_filter}"
             "RETURN DISTINCT dependent.path AS path, dependent.project_id AS project_id, "
             "dependent.type AS type, length(p) AS distance "
             "ORDER BY distance"
         )
-        return self.query(cypher, {"node_id": node_id, "edge_types": types})
+        params = {"node_id": node_id, "edge_types": types}
+        if project_ids is not None:
+            params["project_ids"] = project_ids
+        return self.query(cypher, params)
 
     def delete_nodes(self, ids: list[str]) -> None:
         if not ids:

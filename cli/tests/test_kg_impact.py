@@ -138,3 +138,34 @@ def test_kg_impact_tool_global_scope_requires_central_topology(tmp_path, monkeyp
 
     assert "error" in data
     assert "central" in data["error"].lower()
+
+
+def test_kg_impact_tool_global_scope_passes_project_and_overlays(tmp_path, monkeypatch):
+    """Federated overlays: the tool must pass [own project_id, *overlays] to
+    find_impact, not query unrestricted — this is the isolation boundary
+    across a shared central graph, not an optional extra."""
+    from unittest.mock import MagicMock, patch
+    from cartographer import config as config_mod
+
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    cfg = config_mod.CartographerConfig(
+        project=config_mod.ProjectSection(id="proj_x", name="x"),
+        topology=config_mod.TopologySection(mode="central"),
+        federation=config_mod.FederationSection(global_overlays=["design-system", "platform-api"]),
+    )
+    config_mod.save_config(workspace, cfg)
+    config_mod.save_local_override(workspace, config_mod.LocalOverrideConfig(
+        central_kg=config_mod.CentralKgConfig(password="x"),
+    ))
+
+    mock_central_kg = MagicMock()
+    mock_central_kg.is_reachable.return_value = True
+    mock_central_kg.find_impact.return_value = []
+
+    with patch("cartographer.indexing.central.get_central_kg", return_value=mock_central_kg):
+        kg_server.kg_impact(node_id="path:a.py", workspace=str(workspace), scope="global")
+
+    mock_central_kg.find_impact.assert_called_once()
+    call_kwargs = mock_central_kg.find_impact.call_args.kwargs
+    assert call_kwargs["project_ids"] == ["proj_x", "design-system", "platform-api"]
