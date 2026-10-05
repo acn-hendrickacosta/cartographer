@@ -161,5 +161,5 @@ Register `gc` in `cli/src/cartographer/cli.py`.
 
 ---
 
-*Previous pass: [Phase 3.1 — Watcher Local Cleanup](phase-3.1-watcher-local-cleanup.md)*  
+*Previous pass: [Phase 3.1.3 — Serve Process Lifecycle](phase-3.1.3-serve-process-lifecycle.md)*  
 *Next pass: [Phase 3.3 — Rename Tracking](phase-3.3-rename-tracking.md)*
