@@ -1,0 +1,56 @@
+# Cartographer CI/CD freshness integration (Phase 4).
+#
+# Keeps the global (central) index in sync with main: on every push, re-ingests
+# only what changed and promotes it, instead of re-walking the whole repo.
+#
+# Copy this file to .github/workflows/cartographer-promote.yml and set the six
+# secrets below in the repo's Settings -> Secrets and variables -> Actions.
+# These map directly to cartographer.local.toml's [central_vdb]/[central_kg]
+# fields — see config.py's load_local_override, which reads these exact env
+# var names as an override layer on top of (or in place of) that file.
+#
+# `github.event.before` (the SHA immediately before this push) is used as the
+# diff base rather than a hardcoded `origin/main~1` — a push can contain more
+# than one commit, and `~1` would silently miss everything before the most
+# recent one in that case.
+
+name: Cartographer promote
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — git diff needs to reach github.event.before
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install cartographer
+        run: pip install "cartographer[embed,central] @ git+https://github.com/<org>/<repo>.git#subdirectory=cli"
+
+      - name: Seed and promote changed files only
+        env:
+          CARTO_CENTRAL_VDB_HOST: ${{ secrets.CARTO_CENTRAL_VDB_HOST }}
+          CARTO_CENTRAL_VDB_PORT: ${{ secrets.CARTO_CENTRAL_VDB_PORT }}
+          CARTO_CENTRAL_VDB_USER: ${{ secrets.CARTO_CENTRAL_VDB_USER }}
+          CARTO_CENTRAL_VDB_PASSWORD: ${{ secrets.CARTO_CENTRAL_VDB_PASSWORD }}
+          CARTO_CENTRAL_VDB_DATABASE: ${{ secrets.CARTO_CENTRAL_VDB_DATABASE }}
+          CARTO_CENTRAL_KG_URI: ${{ secrets.CARTO_CENTRAL_KG_URI }}
+          CARTO_CENTRAL_KG_USER: ${{ secrets.CARTO_CENTRAL_KG_USER }}
+          CARTO_CENTRAL_KG_PASSWORD: ${{ secrets.CARTO_CENTRAL_KG_PASSWORD }}
+          CARTO_PROMOTION_TOKEN: ${{ secrets.CARTO_PROMOTION_TOKEN }}
+        run: |
+          BASE="${{ github.event.before }}"
+          # First push to a new branch/repo: github.event.before is all zeros.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE=$(git rev-parse HEAD~1 2>/dev/null || git rev-list --max-parents=0 HEAD)
+          fi
+          cartographer seed --diff "$BASE" --strict
+          cartographer promote --diff "$BASE"

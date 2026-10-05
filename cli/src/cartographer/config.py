@@ -191,16 +191,51 @@ def save_config(workspace: Path, config: CartographerConfig) -> Path:
 
 
 def load_local_override(workspace: Path) -> LocalOverrideConfig:
+    """Load cartographer.local.toml, then apply CARTO_CENTRAL_VDB_*/
+    CARTO_CENTRAL_KG_*/CARTO_PROMOTION_TOKEN environment variable overrides
+    on top (Phase 4 CI/CD integration — a CI runner has no local.toml file
+    and injects secrets as env vars instead; see _apply_env_overrides).
+    Works even when the file doesn't exist at all, for a from-scratch CI
+    checkout."""
     path = local_config_path(workspace)
-    if not path.exists():
-        return LocalOverrideConfig()
-    data = tomlkit.parse(path.read_text(encoding="utf-8"))
-    return LocalOverrideConfig(
-        paths=LocalPathsSection(**data.get("paths", {})),
-        central_vdb=CentralVdbConfig(**data.get("central_vdb", {})),
-        central_kg=CentralKgConfig(**data.get("central_kg", {})),
-        promotion_token=str(data.get("promotion_token", "")),
-    )
+    if path.exists():
+        data = tomlkit.parse(path.read_text(encoding="utf-8"))
+        override = LocalOverrideConfig(
+            paths=LocalPathsSection(**data.get("paths", {})),
+            central_vdb=CentralVdbConfig(**data.get("central_vdb", {})),
+            central_kg=CentralKgConfig(**data.get("central_kg", {})),
+            promotion_token=str(data.get("promotion_token", "")),
+        )
+    else:
+        override = LocalOverrideConfig()
+    _apply_env_overrides(override)
+    return override
+
+
+def _apply_env_overrides(override: LocalOverrideConfig) -> None:
+    import os
+
+    env = os.environ
+    if env.get("CARTO_CENTRAL_VDB_HOST"):
+        override.central_vdb.host = env["CARTO_CENTRAL_VDB_HOST"]
+    if env.get("CARTO_CENTRAL_VDB_PORT"):
+        override.central_vdb.port = int(env["CARTO_CENTRAL_VDB_PORT"])
+    if env.get("CARTO_CENTRAL_VDB_USER"):
+        override.central_vdb.user = env["CARTO_CENTRAL_VDB_USER"]
+    if env.get("CARTO_CENTRAL_VDB_PASSWORD"):
+        override.central_vdb.password = env["CARTO_CENTRAL_VDB_PASSWORD"]
+    if env.get("CARTO_CENTRAL_VDB_DATABASE"):
+        override.central_vdb.database = env["CARTO_CENTRAL_VDB_DATABASE"]
+
+    if env.get("CARTO_CENTRAL_KG_URI"):
+        override.central_kg.uri = env["CARTO_CENTRAL_KG_URI"]
+    if env.get("CARTO_CENTRAL_KG_USER"):
+        override.central_kg.user = env["CARTO_CENTRAL_KG_USER"]
+    if env.get("CARTO_CENTRAL_KG_PASSWORD"):
+        override.central_kg.password = env["CARTO_CENTRAL_KG_PASSWORD"]
+
+    if env.get("CARTO_PROMOTION_TOKEN"):
+        override.promotion_token = env["CARTO_PROMOTION_TOKEN"]
 
 
 def save_local_override(workspace: Path, override: LocalOverrideConfig) -> Path:

@@ -1,0 +1,41 @@
+# Cartographer CI/CD freshness integration (Phase 4).
+#
+# Keeps the global (central) index in sync with main: on every push, re-ingests
+# only what changed and promotes it, instead of re-walking the whole repo.
+#
+# Copy this into (or include from) your project's .gitlab-ci.yml and define
+# the six CI/CD variables below in Settings -> CI/CD -> Variables, marked
+# Protected and Masked. These map directly to cartographer.local.toml's
+# [central_vdb]/[central_kg] fields — see config.py's load_local_override,
+# which reads these exact env var names as an override layer on top of (or
+# in place of) that file.
+#
+# CI_COMMIT_BEFORE_SHA (the SHA immediately before this push) is used as the
+# diff base rather than a hardcoded "~1" — a push can contain more than one
+# commit, and "~1" would silently miss everything before the most recent one
+# in that case. GitLab sets CI_COMMIT_BEFORE_SHA to all zeros for a branch's
+# first pipeline run, same fallback handling as the GitHub Actions template.
+
+cartographer-promote:
+  stage: deploy
+  image: python:3.11
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  variables:
+    GIT_DEPTH: 0 # full history — git diff needs to reach CI_COMMIT_BEFORE_SHA
+  before_script:
+    - pip install "cartographer[embed,central] @ git+https://github.com/<org>/<repo>.git#subdirectory=cli"
+  script:
+    - |
+      BASE="$CI_COMMIT_BEFORE_SHA"
+      if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+        BASE=$(git rev-parse HEAD~1 2>/dev/null || git rev-list --max-parents=0 HEAD)
+      fi
+      cartographer seed --diff "$BASE" --strict
+      cartographer promote --diff "$BASE"
+  # CARTO_CENTRAL_VDB_HOST, CARTO_CENTRAL_VDB_PORT, CARTO_CENTRAL_VDB_USER,
+  # CARTO_CENTRAL_VDB_PASSWORD, CARTO_CENTRAL_VDB_DATABASE,
+  # CARTO_CENTRAL_KG_URI, CARTO_CENTRAL_KG_USER, CARTO_CENTRAL_KG_PASSWORD,
+  # CARTO_PROMOTION_TOKEN are read from GitLab CI/CD variables automatically —
+  # no need to reference them explicitly here as long as they're defined at
+  # the project or group level with matching names.
