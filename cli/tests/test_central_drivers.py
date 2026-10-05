@@ -877,3 +877,23 @@ def test_find_impact_respects_edge_type_filter(tmp_path):
 
     rows = drv.find_impact(a.id, depth=4, edge_types=["imports"])
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: graph versioning integration test (PromotionRecord, Neo4j)
+# ---------------------------------------------------------------------------
+
+@integration
+@neo4j_only
+def test_record_and_list_promotions(tmp_path):
+    drv = _make_neo4j_driver()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+
+    drv.record_promotion(pid, "sha1sha1", "2026-01-01T00:00:00+00:00", 10, 5)
+    drv.record_promotion(pid, "sha2sha2", "2026-01-02T00:00:00+00:00", 15, 8)
+
+    rows = drv.list_promotions(pid)
+    assert len(rows) == 2
+    assert rows[0]["commit_sha"] == "sha2sha2"  # most recent first
+    assert rows[1]["commit_sha"] == "sha1sha1"
+    assert rows[0]["node_count"] == 15

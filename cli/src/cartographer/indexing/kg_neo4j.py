@@ -202,6 +202,38 @@ class Neo4jDriver:
         finally:
             drv.close()
 
+    def record_promotion(self, project_id: str, commit_sha: str, promoted_at: str, node_count: int, edge_count: int) -> None:
+        """Phase 4: graph versioning — append-only promotion history.
+
+        A separate PromotionRecord node type, not an Artifact property.
+        registry.ProjectRecord.last_promoted_sha (Phase 3.3) is a single
+        value overwritten on every promote, used as the rename-detection
+        diff base — it is not a history and must not be conflated with this.
+        counts reflect the total global graph size after this promotion
+        completed (namespace_stats()), not this promotion's own delta.
+        """
+        drv = self._driver()
+        try:
+            with drv.session() as session:
+                session.run(
+                    "CREATE (p:PromotionRecord {project_id: $project_id, commit_sha: $commit_sha, "
+                    "promoted_at: $promoted_at, node_count: $node_count, edge_count: $edge_count})",
+                    project_id=project_id, commit_sha=commit_sha, promoted_at=promoted_at,
+                    node_count=node_count, edge_count=edge_count,
+                )
+        finally:
+            drv.close()
+
+    def list_promotions(self, project_id: str) -> list[dict]:
+        """Promotion history for a project, most recent first."""
+        return self.query(
+            "MATCH (p:PromotionRecord {project_id: $project_id}) "
+            "RETURN p.commit_sha AS commit_sha, p.promoted_at AS promoted_at, "
+            "p.node_count AS node_count, p.edge_count AS edge_count "
+            "ORDER BY p.promoted_at DESC",
+            {"project_id": project_id},
+        )
+
     def is_reachable(self) -> bool:
         try:
             drv = self._driver()

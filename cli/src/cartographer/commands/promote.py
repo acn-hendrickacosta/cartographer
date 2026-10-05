@@ -295,5 +295,19 @@ def run(
             pass  # non-git repo or git unavailable; leave as previous value
         registry.upsert_project(record)
 
+        # Graph versioning (Phase 4): append-only promotion history, separate
+        # from last_promoted_sha above (that's a single value for rename
+        # detection's diff base, not a log). Best-effort — a failure here
+        # must not undo or fail an otherwise-successful promote.
+        if record.last_promoted_sha:
+            try:
+                stats = central_kg.namespace_stats()
+                central_kg.record_promotion(
+                    project_id, record.last_promoted_sha, record.last_promoted_at,
+                    stats.get("nodes", 0), stats.get("edges", 0),
+                )
+            except Exception as exc:
+                console.print(f"[yellow]warning: failed to record promotion history: {exc}[/yellow]")
+
     console.print(f"  promoted: {len(all_chunks)} chunks, {len(all_nodes)} nodes, {len(all_edges)} edges")
     console.print("[bold green]promote complete[/bold green]")

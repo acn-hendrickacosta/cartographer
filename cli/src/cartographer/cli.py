@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from cartographer.commands import detect, doctor, gc, init, promote, recall, seed, serve
+from cartographer.commands import detect, doctor, gc, init, log, promote, recall, seed, serve
 from cartographer.commands import hook as hook_cmd
 from cartographer.commands import stack as stack_cmd
 from cartographer.commands import taxonomy as taxonomy_cmd
@@ -45,6 +45,7 @@ app.command("doctor")(doctor.run)
 app.add_typer(serve.app, name="serve")
 app.command("gc")(gc.run)
 app.add_typer(taxonomy_cmd.app, name="taxonomy")
+app.command("log")(log.run)
 
 
 if __name__ == "__main__":
