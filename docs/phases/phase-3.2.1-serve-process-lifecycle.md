@@ -1,5 +1,7 @@
 # Phase 3.2.1: Serve Process Lifecycle — PID File, Signal Handling, and Supervision
 
+**Status:** Code complete as of 2026-10-05. All 9 exit criteria verified — the first 7 manually against a live running instance (clean SIGTERM shutdown, startup collision refusal, stale-PID-file self-heal, `serve stop`/`status`, independent child-restart detection, and a crash loop that fired for real against leftover multi-day-old orphaned ports from this project's own earlier debugging session), plus 14 new unit tests in `cli/tests/test_serve_lifecycle.py` (171 total passing, no regressions).
+
 ## Goal
 
 Make `cartographer serve` safe to run as a long-lived background process, not just an interactive foreground command. After this phase, stopping, restarting, and checking the health of `serve` are first-class operations with no manual `ps`/`kill` archaeology, and a crashed child process is detected and reported instead of silently leaving the index half-served.
