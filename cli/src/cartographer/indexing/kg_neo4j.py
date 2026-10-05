@@ -97,6 +97,22 @@ class Neo4jDriver:
         finally:
             drv.close()
 
+    def query_raising(self, cypher: str, params: dict | None = None) -> list[dict]:
+        """Same as query(), but propagates exceptions instead of swallowing
+        them to []. query()'s silent-degrade-to-empty contract is relied on
+        by recall.py/gc.py/promote.py; this exists only for kg_search's retry
+        loop, which needs to distinguish "the query failed" from "the query
+        succeeded and legitimately found nothing" — query() makes those two
+        cases indistinguishable on purpose, which is exactly the wrong
+        behavior for deciding whether to retry Claude-generated Cypher."""
+        drv = self._driver()
+        try:
+            with drv.session() as session:
+                result = session.run(cypher, **(params or {}))
+                return [dict(record) for record in result]
+        finally:
+            drv.close()
+
     def set_tombstoned(self, path: str, timestamp: str) -> None:
         """Set tombstoned_at on the Artifact node matching the given path."""
         drv = self._driver()

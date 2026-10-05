@@ -13,6 +13,7 @@ Tools:
   - kg_neighbors : get neighboring nodes of an artifact
   - kg_stats     : node and edge counts
   - kg_impact    : reverse-traversal impact analysis, local or cross-project (Phase 4)
+  - kg_search    : natural-language question to Cypher via a direct Claude API call (Phase 4)
 
 HTTP mode also exposes plain REST routes so other CLI commands can delegate
 KG access to this process instead of opening kg.kuzu themselves — once this
@@ -230,6 +231,83 @@ def kg_impact(
         allowed_projects = [cfg.project.id, *cfg.federation.global_overlays]
         rows = central_kg.find_impact(node_id, depth=depth, edge_types=types, project_ids=allowed_projects)
         return json.dumps({"node_id": node_id, "scope": "global", "impact": rows}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def kg_search(
+    question: str,
+    workspace: str = "",
+    scope: str = "local",
+) -> str:
+    """Answer a structural question about the codebase using the knowledge graph.
+
+    Translates the question to Cypher internally via a direct Claude API
+    call — you do not need to write Cypher. Use this when kg_query would
+    require you to know the exact schema. Requires an Anthropic API key
+    (anthropic_api_key in cartographer.local.toml, or CARTO_ANTHROPIC_API_KEY)
+    and the anthropic SDK (pip install "cartographer[kg-search]").
+
+    Examples:
+      "What calls _build_prompt?"
+      "Which files import cartographer.config?"
+      "What classes extend BaseCommand?"
+
+    Args:
+        question: Natural language question about code structure.
+        workspace: Absolute path to project root. Always pass this (see CLAUDE.md).
+        scope: "local" or "global".
+    """
+    try:
+        from cartographer import config as config_mod
+
+        ws = _resolve_workspace(workspace)
+        if not config_mod.config_exists(ws):
+            return json.dumps({"error": f"no cartographer.toml found at {ws}"})
+        cfg = config_mod.load_config(ws)
+        override = config_mod.load_local_override(ws)
+        if not override.anthropic_api_key:
+            return json.dumps({
+                "error": "kg_search requires an Anthropic API key; set anthropic_api_key in "
+                         "cartographer.local.toml or the CARTO_ANTHROPIC_API_KEY env var"
+            })
+
+        from cartographer.kg_search import KgSearchError, run_kg_search
+
+        if scope == "local":
+            from cartographer.indexing import kg as kg_driver
+
+            kg_path = ws / ".cartographer" / "local" / "kg.kuzu"
+            if not kg_path.exists():
+                return json.dumps({"error": f"Local KG not found at {kg_path}. Run: cartographer seed ."})
+
+            def _query(cypher: str, params: dict) -> list[dict]:
+                return kg_driver.query(kg_path, cypher, params or None)
+
+            cypher, rows = run_kg_search(question, override.anthropic_api_key, _query)
+            return json.dumps({"question": question, "scope": "local", "cypher": cypher, "results": rows}, default=str)
+
+        if cfg.topology.mode != "central":
+            return json.dumps({"error": "kg_search with scope='global' requires topology.mode = 'central'; use scope='local' instead"})
+
+        from cartographer.indexing.central import get_central_kg
+
+        central_kg = get_central_kg(cfg, override)
+        if not central_kg.is_reachable():
+            return json.dumps({"error": "central KG (Neo4j) is not reachable"})
+
+        # Federated overlays (same isolation boundary as kg_impact): this
+        # project's own data plus anything explicitly opted into.
+        allowed_projects = [cfg.project.id, *cfg.federation.global_overlays]
+
+        cypher, rows = run_kg_search(
+            question, override.anthropic_api_key, central_kg.query_raising,
+            allowed_projects=allowed_projects,
+        )
+        return json.dumps({"question": question, "scope": "global", "cypher": cypher, "results": rows}, default=str)
+    except (ImportError, KgSearchError) as exc:
+        return json.dumps({"error": str(exc)})
     except Exception as exc:
         return json.dumps({"error": str(exc)})
 

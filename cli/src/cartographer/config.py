@@ -141,6 +141,7 @@ class LocalOverrideConfig(BaseModel):
     central_vdb: CentralVdbConfig = Field(default_factory=CentralVdbConfig)
     central_kg: CentralKgConfig = Field(default_factory=CentralKgConfig)
     promotion_token: str = ""
+    anthropic_api_key: str = ""  # Phase 4 kg_search: direct Claude API call, not a recursive MCP call
 
     def to_toml(self) -> str:
         doc = tomlkit.document()
@@ -151,6 +152,8 @@ class LocalOverrideConfig(BaseModel):
         doc["central_kg"] = self.central_kg.model_dump()
         if self.promotion_token:
             doc["promotion_token"] = self.promotion_token
+        if self.anthropic_api_key:
+            doc["anthropic_api_key"] = self.anthropic_api_key
         return tomlkit.dumps(doc)
 
 
@@ -205,6 +208,7 @@ def load_local_override(workspace: Path) -> LocalOverrideConfig:
             central_vdb=CentralVdbConfig(**data.get("central_vdb", {})),
             central_kg=CentralKgConfig(**data.get("central_kg", {})),
             promotion_token=str(data.get("promotion_token", "")),
+            anthropic_api_key=str(data.get("anthropic_api_key", "")),
         )
     else:
         override = LocalOverrideConfig()
@@ -236,6 +240,13 @@ def _apply_env_overrides(override: LocalOverrideConfig) -> None:
 
     if env.get("CARTO_PROMOTION_TOKEN"):
         override.promotion_token = env["CARTO_PROMOTION_TOKEN"]
+
+    if env.get("CARTO_ANTHROPIC_API_KEY"):
+        override.anthropic_api_key = env["CARTO_ANTHROPIC_API_KEY"]
+    elif env.get("ANTHROPIC_API_KEY"):
+        # Fall back to the standard SDK-wide env var name so kg_search works
+        # out of the box for anyone who already has this set for other tools.
+        override.anthropic_api_key = env["ANTHROPIC_API_KEY"]
 
 
 def save_local_override(workspace: Path, override: LocalOverrideConfig) -> Path:
