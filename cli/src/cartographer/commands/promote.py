@@ -34,6 +34,7 @@ def run(
     path: Path = typer.Option(Path("."), "--path", help="Workspace root"),
     full: bool = typer.Option(False, "--full/--incremental", help="Promote all local artifacts (--full) or only those changed since last promotion (--incremental, default)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Report what would be promoted without writing anything."),
+    diff: str = typer.Option(None, "--diff", help="Only promote artifacts whose path changed since this git ref (git diff --name-only), instead of the --incremental timestamp filter. Pass 'auto' to reuse last_promoted_sha (same baseline Phase 3.3 rename detection uses)."),
 ) -> None:
     workspace = path.resolve()
     if not config_mod.config_exists(workspace):
@@ -79,12 +80,26 @@ def run(
     record = registry.get_project(project_id)
     last_promoted_at = record.last_promoted_at if record else ""
 
+    # --diff takes precedence over --full/--incremental: it replaces the
+    # timestamp-based filter with an explicit git-diff path allowlist.
+    diff_base_ref: str | None = None
+    if diff is not None:
+        diff_base_ref = diff
+        if diff_base_ref == "auto":
+            diff_base_ref = record.last_promoted_sha if record else ""
+            if not diff_base_ref:
+                console.print("[yellow]--diff auto: no last_promoted_sha recorded yet; promoting all local artifacts instead[/yellow]")
+                diff_base_ref = None
+
     # Determine promotion mode
-    incremental = not full and bool(last_promoted_at)
+    incremental = diff_base_ref is None and not full and bool(last_promoted_at)
 
     console.print("[bold]cartographer promote[/bold]")
     console.print(f"  project:  {project_id}")
-    console.print(f"  mode:     {'full' if full or not last_promoted_at else 'incremental'}")
+    if diff_base_ref:
+        console.print(f"  mode:     diff (since {diff_base_ref})")
+    else:
+        console.print(f"  mode:     {'full' if full or not last_promoted_at else 'incremental'}")
     if incremental:
         console.print(f"  since:    {last_promoted_at}")
 
@@ -132,6 +147,22 @@ def run(
             if datetime.datetime.fromisoformat(c.updated_at) > cutoff
         ]
         changed_paths = {c.path for c in all_chunks}
+        all_nodes = [n for n in all_nodes if n.path in changed_paths]
+        changed_node_ids = {n.id for n in all_nodes}
+        all_edges = [e for e in all_edges if e.src in changed_node_ids]
+
+    # Apply --diff filter: only artifacts whose path changed since diff_base_ref
+    if diff_base_ref:
+        try:
+            git_output = subprocess.check_output(
+                ["git", "diff", "--name-only", f"{diff_base_ref}..HEAD"],
+                cwd=workspace, text=True,
+            )
+        except Exception as exc:
+            console.print(f"[red]--diff failed to compute git diff against {diff_base_ref!r}: {exc}[/red]")
+            raise typer.Exit(code=2)
+        changed_paths = {line.strip() for line in git_output.splitlines() if line.strip()}
+        all_chunks = [c for c in all_chunks if c.path in changed_paths]
         all_nodes = [n for n in all_nodes if n.path in changed_paths]
         changed_node_ids = {n.id for n in all_nodes}
         all_edges = [e for e in all_edges if e.src in changed_node_ids]

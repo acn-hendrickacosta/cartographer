@@ -15,6 +15,7 @@ Kuzu's exclusive-lock model. See docs/phases/phase-3.1.1-management-server.md.
 from __future__ import annotations
 
 import json
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -64,11 +65,12 @@ def _delegate_to_serve(port: int, workspace: Path, paths: list[Path], enrich: bo
 
 
 def run(
-    source: Path = typer.Argument(..., help="File or directory to ingest"),
+    source: Path = typer.Argument(None, help="File or directory to ingest. Omit when using --diff (defaults to the workspace root)."),
     path: Path = typer.Option(Path("."), "--path", help="Workspace root (where cartographer.toml lives)"),
     recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Recurse into subdirectories"),
     enrich: bool = typer.Option(False, "--enrich/--no-enrich", help="Use Claude to extract semantic KG relationships (slower, requires claude CLI)."),
     strict: bool = typer.Option(False, "--strict", help="Fail a file instead of warning when it emits an edge type outside the canonical taxonomy (cartographer taxonomy list)."),
+    diff: str = typer.Option(None, "--diff", help="Only ingest files changed since this git ref (git diff --name-only). Pass 'auto' to reuse the project's last_promoted_sha (the same baseline Phase 3.3 rename detection uses) instead of naming a ref."),
 ) -> None:
     workspace = path.resolve()
     if not config_mod.config_exists(workspace):
@@ -80,6 +82,12 @@ def run(
     if record is None:
         console.print("[red]project not registered; run 'cartographer init' first[/red]")
         raise typer.Exit(code=1)
+
+    if source is None:
+        if diff is None:
+            console.print("[red]source is required unless --diff is used[/red]")
+            raise typer.Exit(code=2)
+        source = workspace
 
     source = source.resolve()
     if not source.exists():
@@ -96,6 +104,27 @@ def run(
         paths = [source]
     else:
         paths = text_extractor.collect_paths(source, recursive=recursive)
+
+    if diff is not None:
+        base_ref = diff
+        if base_ref == "auto":
+            base_ref = record.last_promoted_sha
+            if not base_ref:
+                console.print("[yellow]--diff auto: no last_promoted_sha recorded yet (no promote has run); ingesting all discovered files instead[/yellow]")
+                base_ref = None
+        if base_ref:
+            try:
+                git_output = subprocess.check_output(
+                    ["git", "diff", "--name-only", f"{base_ref}..HEAD"],
+                    cwd=workspace, text=True,
+                )
+            except Exception as exc:
+                console.print(f"[red]--diff failed to compute git diff against {base_ref!r}: {exc}[/red]")
+                raise typer.Exit(code=2)
+            changed = {(workspace / line.strip()).resolve() for line in git_output.splitlines() if line.strip()}
+            before = len(paths)
+            paths = [p for p in paths if p.resolve() in changed]
+            console.print(f"  --diff {base_ref}: {len(paths)} of {before} discovered file(s) changed since then")
 
     if not paths:
         console.print("[yellow]no ingestable files found[/yellow]")
