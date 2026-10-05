@@ -223,3 +223,33 @@ conflict_notice = true
 # This file is shared across all projects on the machine; do not put it inside
 # a project directory.
 path = "~/.cartographer/registry.db"
+
+
+# ---------------------------------------------------------------------------
+# Edge taxonomy (Phase 4)
+# ---------------------------------------------------------------------------
+#
+# Named [taxonomy], not [kg] — a top-level [kg] section already exists above
+# this one in older copies of this file (driver selection) and was never
+# actually read by config.py's loader. Reusing that name here would create a
+# second, differently-shaped collision with the same dead section instead of
+# fixing it. See docs/phases/phase-4-enterprise.md's alignment note and
+# docs/standards/edge-taxonomy.md for the full canonical list.
+
+[taxonomy]
+
+# Pinned edge-type taxonomy version. `cartographer doctor` reports drift if
+# this doesn't match the version bundled with the installed CLI.
+version = "1.0"
+
+
+# ---------------------------------------------------------------------------
+# Federation (Phase 4)
+# ---------------------------------------------------------------------------
+
+[federation]
+
+# project_ids whose global (central) scope this project's KG queries should
+# also fan out to, read-only, in addition to its own. Empty by default.
+# global_overlays = ["design-system", "platform-api"]
+global_overlays = []

@@ -7,6 +7,7 @@ import typer
 from cartographer.commands import detect, doctor, gc, init, promote, recall, seed, serve
 from cartographer.commands import hook as hook_cmd
 from cartographer.commands import stack as stack_cmd
+from cartographer.commands import taxonomy as taxonomy_cmd
 from cartographer.commands import ui_cmd
 
 def _version_callback(value: bool) -> None:
@@ -43,6 +44,7 @@ app.command("ui")(ui_cmd.run)
 app.command("doctor")(doctor.run)
 app.add_typer(serve.app, name="serve")
 app.command("gc")(gc.run)
+app.add_typer(taxonomy_cmd.app, name="taxonomy")
 
 
 if __name__ == "__main__":

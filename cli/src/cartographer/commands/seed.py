@@ -41,12 +41,13 @@ def _serve_reachable(port: int) -> bool:
         return False
 
 
-def _delegate_to_serve(port: int, workspace: Path, paths: list[Path], enrich: bool) -> dict:
+def _delegate_to_serve(port: int, workspace: Path, paths: list[Path], enrich: bool, strict: bool) -> dict:
     payload = json.dumps({
         "workspace": str(workspace),
         "paths": [str(p) for p in paths],
         "scope": "local",
         "enrich": enrich,
+        "strict": strict,
     }).encode("utf-8")
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/api/ingest",
@@ -67,6 +68,7 @@ def run(
     path: Path = typer.Option(Path("."), "--path", help="Workspace root (where cartographer.toml lives)"),
     recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Recurse into subdirectories"),
     enrich: bool = typer.Option(False, "--enrich/--no-enrich", help="Use Claude to extract semantic KG relationships (slower, requires claude CLI)."),
+    strict: bool = typer.Option(False, "--strict", help="Fail a file instead of warning when it emits an edge type outside the canonical taxonomy (cartographer taxonomy list)."),
 ) -> None:
     workspace = path.resolve()
     if not config_mod.config_exists(workspace):
@@ -104,7 +106,7 @@ def run(
     if _serve_reachable(KG_SERVER_PORT):
         console.print(f"  [cyan]delegating to cartographer serve (port {KG_SERVER_PORT})…[/cyan]")
         try:
-            result = _delegate_to_serve(KG_SERVER_PORT, workspace, paths, enrich)
+            result = _delegate_to_serve(KG_SERVER_PORT, workspace, paths, enrich, strict)
         except Exception as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1)
@@ -112,6 +114,10 @@ def run(
         console.print(f"  processed: {result['files_processed']}")
         if result.get("files_skipped"):
             console.print(f"  [yellow]skipped: {result['files_skipped']}[/yellow]")
+        if result.get("taxonomy_warnings"):
+            console.print(f"  [yellow]taxonomy warnings: {len(result['taxonomy_warnings'])}[/yellow]")
+            for msg in result["taxonomy_warnings"][:5]:
+                console.print(f"    - {msg}")
         if result.get("errors"):
             console.print(f"  [red]errors: {len(result['errors'])}[/red]")
             for msg in result["errors"][:5]:
@@ -163,6 +169,7 @@ def run(
             embedder=embedder,
             on_file=lambda _p: progress.advance(task),
             enrich=enrich,
+            strict=strict,
         )
 
     console.print(f"  processed: {result.files_processed}")
@@ -172,6 +179,11 @@ def run(
             console.print(f"    - {msg}")
         if len(result.skipped_paths) > 5:
             console.print(f"    ... and {len(result.skipped_paths) - 5} more")
+
+    if result.taxonomy_warnings:
+        console.print(f"  [yellow]taxonomy warnings: {len(result.taxonomy_warnings)}[/yellow]")
+        for msg in result.taxonomy_warnings[:5]:
+            console.print(f"    - {msg}")
 
     if result.errors:
         console.print(f"  [red]errors: {len(result.errors)}[/red]")

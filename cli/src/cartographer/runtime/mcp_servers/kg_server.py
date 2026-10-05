@@ -333,6 +333,7 @@ async def _api_ingest(request):
     paths = body.get("paths", [])
     scope = body.get("scope", "local")
     enrich = bool(body.get("enrich", False))
+    strict = bool(body.get("strict", False))
 
     if not workspace or not paths:
         return JSONResponse({"detail": "workspace and paths are required"}, status_code=422)
@@ -375,6 +376,7 @@ async def _api_ingest(request):
             scope=scope,
             embedder=embedder,
             enrich=enrich,
+            strict=strict,
         )
 
     return JSONResponse({
@@ -384,6 +386,7 @@ async def _api_ingest(request):
         "nodes_upserted": result.nodes_upserted,
         "edges_upserted": result.edges_upserted,
         "errors": result.errors,
+        "taxonomy_warnings": result.taxonomy_warnings,
     })
 
 

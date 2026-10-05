@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cartographer import taxonomy
 from cartographer.artifact_id import chunk_id as make_chunk_id
 from cartographer.ingestion import chunker, graph_extractor, text_extractor
 from cartographer.ingestion.embedder import Embedder, get_embedder
@@ -31,6 +32,7 @@ class IngestionResult:
     edges_upserted: int = 0
     skipped_paths: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    taxonomy_warnings: list[str] = field(default_factory=list)
 
 
 def ingest_paths(
@@ -44,10 +46,15 @@ def ingest_paths(
     embedder: Embedder | None = None,
     on_file: Callable[[Path], None] | None = None,
     enrich: bool = False,
+    strict: bool = False,
 ) -> IngestionResult:
     """Ingest a list of files into the local VDB and KG.
 
     Idempotent: VDB upserts are keyed on chunk_id; KG upserts are keyed on node id.
+
+    strict: if True, a file emitting an edge type outside the canonical
+    taxonomy (cartographer.taxonomy) fails that file instead of being
+    dropped with a warning.
     """
     if embedder is None:
         embedder = get_embedder()
@@ -77,6 +84,7 @@ def ingest_paths(
                     now=now,
                     result=result,
                     enrich=enrich,
+                    strict=strict,
                 )
                 result.files_processed += 1
             except Exception as exc:
@@ -98,6 +106,7 @@ def _ingest_one(
     now: str,
     result: IngestionResult,
     enrich: bool = False,
+    strict: bool = False,
 ) -> None:
     rel_path = str(extraction.path.relative_to(workspace_root))
     artifact_type = extraction.artifact_type
@@ -148,7 +157,18 @@ def _ingest_one(
         enrich=enrich and artifact_type != text_extractor.ArtifactType.CODE,
     )
 
-    # 6. Upsert KG
+    # 6. Lint edge types against the canonical taxonomy before writing
+    unknown_types = taxonomy.lint_edge_types({e.type for e in graph.edges})
+    if unknown_types:
+        types_str = ", ".join(sorted(unknown_types))
+        if strict:
+            raise ValueError(
+                f"unknown edge type(s) not in canonical taxonomy (v{taxonomy.CANONICAL_TAXONOMY_VERSION}): {types_str}"
+            )
+        result.taxonomy_warnings.append(f"{rel_path}: unknown edge type(s) {types_str} — skipped, not written")
+        graph.edges = [e for e in graph.edges if e.type not in unknown_types]
+
+    # 7. Upsert KG
     kg_driver.upsert_nodes(kg_path, graph.nodes)
     kg_driver.upsert_edges(kg_path, graph.edges)
     result.nodes_upserted += len(graph.nodes)

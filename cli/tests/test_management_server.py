@@ -232,13 +232,14 @@ def test_seed_delegates_when_serve_reachable(tmp_path, monkeypatch):
     monkeypatch.setattr(
         seed_cmd,
         "_delegate_to_serve",
-        lambda port, workspace, paths, enrich: {
+        lambda port, workspace, paths, enrich, strict: {
             "files_processed": 1,
             "files_skipped": 0,
             "chunks_upserted": 3,
             "nodes_upserted": 1,
             "edges_upserted": 0,
             "errors": [],
+            "taxonomy_warnings": [],
         },
     )
 
@@ -276,7 +277,7 @@ def test_seed_reports_delegation_errors_and_exits_nonzero(tmp_path, monkeypatch)
     monkeypatch.setattr(
         seed_cmd,
         "_delegate_to_serve",
-        lambda port, workspace, paths, enrich: (_ for _ in ()).throw(RuntimeError("serve rejected ingest request (422): boom")),
+        lambda port, workspace, paths, enrich, strict: (_ for _ in ()).throw(RuntimeError("serve rejected ingest request (422): boom")),
     )
 
     result = runner.invoke(cli_app, ["seed", str(doc), "--path", str(tmp_path)])

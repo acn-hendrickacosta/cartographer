@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from cartographer import config as config_mod
+from cartographer import config as config_mod, taxonomy as taxonomy_mod
 from cartographer.indexing import kg, vdb
 from cartographer.ingestion import parsers as parser_registry
 from cartographer.runtime import serve_state
@@ -107,6 +107,25 @@ def run(
         console.print("[green]OK[/green]   Cartographer MCP entries present in .mcp.json")
     else:
         console.print("[yellow]INFO[/yellow] Cartographer MCP entries not found; run 'cartographer init'")
+
+    if cfg.taxonomy.version == taxonomy_mod.CANONICAL_TAXONOMY_VERSION:
+        console.print(f"[green]OK[/green]   edge taxonomy pinned version ({cfg.taxonomy.version}) matches installed CLI")
+    else:
+        console.print(
+            f"[yellow]INFO[/yellow] edge taxonomy version drift: project pins {cfg.taxonomy.version!r}, "
+            f"installed CLI is {taxonomy_mod.CANONICAL_TAXONOMY_VERSION!r} — see 'cartographer taxonomy list'"
+        )
+
+    if kg.is_readable(local_dir / "kg.kuzu"):
+        try:
+            rows = kg.query(local_dir / "kg.kuzu", "MATCH ()-[r:RelatesTo]->() RETURN DISTINCT r.type AS type")
+            drift = taxonomy_mod.lint_edge_types({r["type"] for r in rows if r.get("type")})
+            if drift:
+                console.print(
+                    f"[yellow]INFO[/yellow] local KG uses edge type(s) outside the canonical taxonomy: {', '.join(sorted(drift))}"
+                )
+        except Exception:
+            pass  # best-effort drift check; doctor's core health checks already covered KG readability above
 
     for stack_name in cfg.stacks.active:
         hint = parser_registry.STACK_PARSER_HINTS.get(stack_name)

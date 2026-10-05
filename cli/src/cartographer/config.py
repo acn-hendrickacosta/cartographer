@@ -66,6 +66,24 @@ class CentralSection(BaseModel):
     kg_driver: str = "neo4j"
 
 
+class TaxonomySection(BaseModel):
+    """Phase 4: pin the edge-type taxonomy version this project expects.
+
+    Deliberately not named [kg] — cartographer.example.toml already has a
+    top-level [kg] section (driver selection) that predates this and was
+    never actually read by load_config; reusing that name here would just
+    create a second, differently-shaped collision with the same dead
+    section instead of fixing it. See phase-4-enterprise.md's alignment note.
+    """
+    version: str = "1.0"
+
+
+class FederationSection(BaseModel):
+    """Phase 4: project_ids whose global scope this project's KG queries
+    should also fan out to (read-only), in addition to its own."""
+    global_overlays: list[str] = Field(default_factory=list)
+
+
 class CartographerConfig(BaseModel):
     project: ProjectSection
     topology: TopologySection = Field(default_factory=TopologySection)
@@ -75,6 +93,8 @@ class CartographerConfig(BaseModel):
     retrieval: RetrievalSection = Field(default_factory=RetrievalSection)
     backends: BackendsSection = Field(default_factory=BackendsSection)
     central: CentralSection = Field(default_factory=CentralSection)
+    taxonomy: TaxonomySection = Field(default_factory=TaxonomySection)
+    federation: FederationSection = Field(default_factory=FederationSection)
 
     def to_toml(self) -> str:
         doc = tomlkit.document()
@@ -91,6 +111,8 @@ class CartographerConfig(BaseModel):
             "embedder": self.backends.embedder.model_dump(),
         }
         doc["central"] = self.central.model_dump()
+        doc["taxonomy"] = self.taxonomy.model_dump()
+        doc["federation"] = self.federation.model_dump()
         return tomlkit.dumps(doc)
 
 
@@ -157,6 +179,8 @@ def load_config(workspace: Path) -> CartographerConfig:
             embedder=BackendDriver(**backends.get("embedder", {"driver": "local"})),
         ),
         central=CentralSection(**data.get("central", {})),
+        taxonomy=TaxonomySection(**data.get("taxonomy", {})),
+        federation=FederationSection(**data.get("federation", {})),
     )
 
 
