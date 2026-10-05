@@ -826,3 +826,54 @@ def test_conflict_detected_end_to_end_via_recall(tmp_path, monkeypatch):
 
     assert result2.exit_code == 0, result2.output
     assert "CONFLICT" not in result2.output
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: kg_impact integration test (global scope, Neo4j)
+# ---------------------------------------------------------------------------
+
+@integration
+@neo4j_only
+def test_find_impact_excludes_tombstoned_dependents(tmp_path):
+    """Exit criterion 4 (adapted): cross-project reverse traversal finds
+    transitive dependents and excludes tombstoned ones."""
+    import datetime
+    drv = _make_neo4j_driver()
+    drv.ensure_namespace()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+
+    a = _node(pid, path="a.py")
+    b = _node(pid, path="b.py")
+    c = _node(pid, path="c.py")
+    drv.upsert_nodes([a, b, c])
+    drv.upsert_edges([
+        _edge(b.id, a.id, edge_type="imports"),
+        _edge(c.id, b.id, edge_type="imports"),
+    ])
+
+    rows = drv.find_impact(a.id, depth=4, edge_types=["imports"])
+    assert {r["path"] for r in rows} == {"b.py", "c.py"}
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    drv.set_tombstoned("b.py", now)
+
+    rows_after = drv.find_impact(a.id, depth=4, edge_types=["imports"])
+    paths_after = {r["path"] for r in rows_after}
+    assert "b.py" not in paths_after
+    assert "c.py" in paths_after
+
+
+@integration
+@neo4j_only
+def test_find_impact_respects_edge_type_filter(tmp_path):
+    drv = _make_neo4j_driver()
+    drv.ensure_namespace()
+    pid = f"test_{uuid.uuid4().hex[:8]}"
+
+    a = _node(pid, path="a.py")
+    b = _node(pid, path="b.py")
+    drv.upsert_nodes([a, b])
+    drv.upsert_edges([_edge(b.id, a.id, edge_type="calls")])
+
+    rows = drv.find_impact(a.id, depth=4, edge_types=["imports"])
+    assert rows == []

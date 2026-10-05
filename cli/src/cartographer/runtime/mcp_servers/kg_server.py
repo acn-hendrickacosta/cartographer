@@ -12,6 +12,7 @@ Tools:
   - kg_query     : execute a read-only Cypher query
   - kg_neighbors : get neighboring nodes of an artifact
   - kg_stats     : node and edge counts
+  - kg_impact    : reverse-traversal impact analysis, local or cross-project (Phase 4)
 
 HTTP mode also exposes plain REST routes so other CLI commands can delegate
 KG access to this process instead of opening kg.kuzu themselves — once this
@@ -169,6 +170,60 @@ def kg_stats(workspace: str = "") -> str:
             "nodes": node_count[0]["cnt"] if node_count else 0,
             "edges": edge_count[0]["cnt"] if edge_count else 0,
         })
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def kg_impact(
+    node_id: str,
+    workspace: str = "",
+    max_depth: int = 4,
+    edge_types: str = "calls,imports,extends",
+    scope: str = "global",
+) -> str:
+    """Return all artifacts that transitively depend on the given node.
+
+    Use this to answer: "what breaks if I change this function/class/module?"
+    Traverses calls, imports, and extends edges in reverse (callers of callee,
+    importers of module, subclasses of class). Excludes tombstoned (deleted)
+    dependents.
+
+    Args:
+        node_id: The artifact node id (usually file path or file::symbol).
+        workspace: Absolute path to project root. Always pass this (see CLAUDE.md).
+        max_depth: Maximum traversal depth 1-6 (default 4).
+        edge_types: Comma-separated edge types to traverse in reverse.
+        scope: "global" to traverse across all promoted projects (default), "local" for this project only.
+    """
+    try:
+        ws = _resolve_workspace(workspace)
+        depth = max(1, min(int(max_depth), 6))
+        types = [t.strip() for t in edge_types.split(",") if t.strip()]
+
+        if scope == "local":
+            from cartographer.indexing import kg as kg_driver
+
+            kg_path = ws / ".cartographer" / "local" / "kg.kuzu"
+            if not kg_path.exists():
+                return json.dumps({"error": f"Local KG not found at {kg_path}. Run: cartographer seed ."})
+            rows = kg_driver.impact(kg_path, node_id=node_id, depth=depth, edge_types=types)
+            return json.dumps({"node_id": node_id, "scope": "local", "impact": rows}, default=str)
+
+        from cartographer import config as config_mod
+        from cartographer.indexing.central import get_central_kg
+
+        if not config_mod.config_exists(ws):
+            return json.dumps({"error": f"no cartographer.toml found at {ws}"})
+        cfg = config_mod.load_config(ws)
+        if cfg.topology.mode != "central":
+            return json.dumps({"error": "kg_impact with scope='global' requires topology.mode = 'central'; use scope='local' instead"})
+        override = config_mod.load_local_override(ws)
+        central_kg = get_central_kg(cfg, override)
+        if not central_kg.is_reachable():
+            return json.dumps({"error": "central KG (Neo4j) is not reachable"})
+        rows = central_kg.find_impact(node_id, depth=depth, edge_types=types)
+        return json.dumps({"node_id": node_id, "scope": "global", "impact": rows}, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)})
 

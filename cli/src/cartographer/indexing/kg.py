@@ -13,11 +13,15 @@ on-disk database and the same upsert semantics instead of reimplementing them.
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
 import kuzu
 from pydantic import BaseModel
+
+_VALID_EDGE_TYPE_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+DEFAULT_IMPACT_EDGE_TYPES = ["calls", "imports", "extends"]
 
 # --- process-level Database cache -------------------------------------------
 # Kuzu imposes a per-file exclusive lock. The rules:
@@ -195,6 +199,39 @@ def neighbors(db_path: Path, node_id: str, depth: int = 1, scope: str | None = N
         "RETURN DISTINCT n.id AS id, n.type AS type, n.path AS path, n.scope AS scope"
     )
     return query(db_path, cypher, {"id": node_id})
+
+
+def impact(
+    db_path: Path,
+    node_id: str,
+    depth: int = 4,
+    edge_types: list[str] | None = None,
+) -> list[dict]:
+    """Phase 4: reverse traversal — everything in the local graph that
+    transitively depends on node_id via the given edge types (default: calls,
+    imports, extends). Answers "what breaks if I change this?" for this
+    project only; see kg_neo4j.Neo4jDriver.find_impact for the cross-project
+    (global) equivalent.
+
+    Same Kuzu binder limitation as neighbors()'s scope filter applies here —
+    a $param inside ALL(...) over a variable-length path triggers a
+    KU_UNREACHABLE assertion — so edge_types is validated against a strict
+    identifier pattern and inlined as a literal list instead of bound.
+    """
+    depth = max(1, min(depth, 6))
+    types = edge_types or DEFAULT_IMPACT_EDGE_TYPES
+    for t in types:
+        if not _VALID_EDGE_TYPE_RE.match(t):
+            raise ValueError(f"invalid edge type: {t!r}")
+    types_literal = "[" + ", ".join(f"'{t}'" for t in types) + "]"
+    cypher = (
+        f"MATCH p = (dependent:Artifact)-[r:RelatesTo* 1..{depth}]->(target:Artifact {{id: $node_id}}) "
+        f"WHERE ALL(rel IN rels(r) WHERE rel.type IN {types_literal}) "
+        "RETURN DISTINCT dependent.path AS path, dependent.project_id AS project_id, "
+        "dependent.type AS type, length(r) AS distance "
+        "ORDER BY distance"
+    )
+    return query(db_path, cypher, {"node_id": node_id})
 
 
 def delete_by_path(kg_path: Path, path: str) -> None:

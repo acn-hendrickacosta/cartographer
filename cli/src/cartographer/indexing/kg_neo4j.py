@@ -142,6 +142,26 @@ class Neo4jDriver:
             params["scope"] = scope
         return self.query(cypher, params)
 
+    def find_impact(self, node_id: str, depth: int = 4, edge_types: list[str] | None = None) -> list[dict]:
+        """Phase 4: reverse traversal across the global graph — everything
+        that transitively depends on node_id via the given edge types
+        (default: calls, imports, extends), excluding tombstoned dependents.
+        Answers "what breaks if I change this?" across every promoted
+        project. Neo4j's Cypher binder has no issue with a list parameter
+        inside ALL(...) over a variable-length path (unlike Kuzu's — see
+        kg.py's impact() for the local-scope equivalent and its workaround)."""
+        depth = max(1, min(depth, 6))
+        types = edge_types or ["calls", "imports", "extends"]
+        cypher = (
+            f"MATCH p = (dependent:Artifact)-[r:RELATES_TO*1..{depth}]->(target:Artifact {{id: $node_id}}) "
+            "WHERE ALL(rel IN r WHERE rel.type IN $edge_types) "
+            "AND (dependent.tombstoned_at IS NULL OR dependent.tombstoned_at = '') "
+            "RETURN DISTINCT dependent.path AS path, dependent.project_id AS project_id, "
+            "dependent.type AS type, length(p) AS distance "
+            "ORDER BY distance"
+        )
+        return self.query(cypher, {"node_id": node_id, "edge_types": types})
+
     def delete_nodes(self, ids: list[str]) -> None:
         if not ids:
             return
