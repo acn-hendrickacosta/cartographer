@@ -1,10 +1,10 @@
-# Phase 3.1.3: Serve Process Lifecycle — PID File, Signal Handling, and Supervision
+# Phase 3.2.1: Serve Process Lifecycle — PID File, Signal Handling, and Supervision
 
 ## Goal
 
 Make `cartographer serve` safe to run as a long-lived background process, not just an interactive foreground command. After this phase, stopping, restarting, and checking the health of `serve` are first-class operations with no manual `ps`/`kill` archaeology, and a crashed child process is detected and reported instead of silently leaving the index half-served.
 
-**Entry condition:** Phase 3.1.1 complete (the subprocess-based `serve` architecture — main process spawning `cartographer-vdb-server` and `cartographer-kg-server --watch` as children — already exists and is in production use). No central backend required; this phase is local/process-management only.
+**Entry condition:** Phase 3.1.1 complete (the subprocess-based `serve` architecture — main process spawning `cartographer-vdb-server` and `cartographer-kg-server --watch` as children — already exists and is in production use). No central backend required; this phase is local/process-management only. Numbered 3.2.1 rather than 3.1.3 because Phase 3.2 (tombstone protocol) is already complete as of this writing — this phase has no dependency on it, but slots after it chronologically rather than appearing to block it.
 
 **Why now:** In enterprise deployments where `allowManagedHooksOnly` blocks Claude Code project hooks (see [[project_hooks_blocked_accenture]]-class policies), `cartographer serve --watch` is not an optional convenience — it is the *only* mechanism that keeps the local index fresh. Its process-lifecycle fragility has a direct, outsized impact on exactly the users who have no fallback.
 
@@ -171,5 +171,5 @@ or
 
 ---
 
-*Previous pass: [Phase 3.1.2 — UI Read Delegation](phase-3.1.2-ui-read-delegation.md)*
-*Next pass: [Phase 3.2 — Tombstone Protocol](phase-3.2-tombstone.md)*
+*Previous pass: [Phase 3.2 — Tombstone Protocol](phase-3.2-tombstone.md)*
+*Next pass: [Phase 3.3 — Rename Tracking](phase-3.3-rename-tracking.md)*

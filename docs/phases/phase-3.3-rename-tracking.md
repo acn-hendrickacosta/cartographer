@@ -156,5 +156,5 @@ New driver methods required:
 
 ---
 
-*Previous pass: [Phase 3.2 — Tombstone Protocol](phase-3.2-tombstone.md)*  
+*Previous pass: [Phase 3.2.1 — Serve Process Lifecycle](phase-3.2.1-serve-process-lifecycle.md)*  
 *Next pass: [Phase 3.4 — Conflict Resolution](phase-3.4-conflict-resolution.md)*
