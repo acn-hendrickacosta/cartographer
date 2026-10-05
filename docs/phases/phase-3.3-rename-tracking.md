@@ -1,5 +1,7 @@
 # Phase 3.3: Rename Tracking — Global Index Rename Linking at Promote Time
 
+**Status:** Code complete as of 2026-10-05. All 9 exit criteria verified — 178 unit tests passing (10 new: 5 in `test_promote_rename.py`, 2 redirect tests in `test_recall_global.py`, 3 direct-driver tests) plus 29 integration tests against a live pgvector+Neo4j backend, including a full end-to-end rename-and-promote-twice idempotency check. The redirect design in this doc's original draft assumed tombstoned VDB chunks could still surface in `global_hits` for recall to check — corrected during implementation once that assumption was found to conflict with Phase 3.2's hard tombstone filter; see `recall.py`'s central-KG path-lookup approach instead.
+
 ## Goal
 
 When a file is renamed and the branch is promoted, the old artifact identity is linked to the new identity via a `supersedes` edge in the global KG. The old path is tombstoned. Recall follows the `supersedes` chain and returns the new artifact, tagged as `origin: renamed`, rather than returning the tombstoned old path or missing the artifact entirely.
