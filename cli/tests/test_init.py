@@ -13,6 +13,38 @@ def _settings(tmp_path: Path) -> dict:
     return json.loads((tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8"))
 
 
+def test_init_rerun_preserves_fields_it_does_not_own(tmp_path: Path, monkeypatch) -> None:
+    """Regression test: init.py used to rebuild cartographer.toml from scratch
+    on every run, special-casing only topology.mode -- silently wiping any
+    other field (registry_url, retrieval tuning, taxonomy version, federation
+    overlays, ...) set outside of init. Found while building SR.2 when a
+    second `init --stacks` run reset stacks.registry_url back to ""."""
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    first = runner.invoke(app, ["init", "--path", str(tmp_path), "--stacks", "python"])
+    assert first.exit_code == 0, first.output
+
+    cfg = config_mod.load_config(tmp_path)
+    # registry_url intentionally left unset here -- setting it would make this
+    # init run actually attempt a registry fetch, which is covered separately
+    # (test_stack_registry_fetch.py's real-server tests). This test is only
+    # about config-field preservation across a re-run.
+    cfg.stacks.registry_fallback = "error"
+    cfg.retrieval.top_k = 42
+    cfg.federation.global_overlays = ["design-system"]
+    config_mod.save_config(tmp_path, cfg)
+
+    second = runner.invoke(app, ["init", "--path", str(tmp_path), "--stacks", "python"])
+    assert second.exit_code == 0, second.output
+
+    reloaded = config_mod.load_config(tmp_path)
+    assert reloaded.stacks.registry_fallback == "error"
+    assert reloaded.retrieval.top_k == 42
+    assert reloaded.federation.global_overlays == ["design-system"]
+    # stacks.active is the one StacksSection field init.py does own -- still updated correctly
+    assert reloaded.stacks.active == ["cross-stack", "python"]
+
+
 def test_init_scaffolds_workspace(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
 
@@ -126,3 +158,65 @@ def test_promote_is_noop_for_local_topology(tmp_path: Path, monkeypatch) -> None
 
     assert result.exit_code == 0
     assert "nothing to promote" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: topology=none (indexing opt-out)
+# ---------------------------------------------------------------------------
+
+def test_init_topology_none_skips_indexing_but_installs_packs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    result = runner.invoke(app, ["init", "--path", str(tmp_path), "--stacks", "python", "--topology", "none"])
+    assert result.exit_code == 0, result.output
+
+    # No indexing artifacts at all
+    assert not (tmp_path / ".cartographer" / "local").exists()
+    assert not (tmp_path / ".mcp.json").exists()
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+    assert not (tmp_path / ".claude" / "skills" / "archaeology").exists()
+    assert not (tmp_path / ".claude" / "skills" / "recall").exists()
+
+    # Standards/skills/agents packs still install normally
+    assert (tmp_path / ".claude" / "standards" / "python").is_dir()
+    assert (tmp_path / ".claude" / "skills" / "accessibility" / "SKILL.md").exists()  # a core skill
+    assert len(list((tmp_path / ".claude" / "agents").glob("*.md"))) > 0
+
+    cfg = config_mod.load_config(tmp_path)
+    assert cfg.topology.mode == "none"
+
+
+def test_init_topology_none_claude_md_has_no_index_mandate(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    result = runner.invoke(app, ["init", "--path", str(tmp_path), "--topology", "none"])
+    assert result.exit_code == 0, result.output
+
+    claude_md = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "VDB and KG are your primary search tools" not in claude_md
+    assert "Standards live under" in claude_md
+
+
+def test_init_topology_none_does_not_delete_existing_local_index(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    runner.invoke(app, ["init", "--path", str(tmp_path)])
+    assert (tmp_path / ".cartographer" / "local" / "vdb.lance").exists()
+
+    result = runner.invoke(app, ["init", "--path", str(tmp_path), "--topology", "none"])
+    assert result.exit_code == 0, result.output
+
+    # Switching to none doesn't delete what was already provisioned -- it just
+    # stops maintaining it going forward.
+    assert (tmp_path / ".cartographer" / "local" / "vdb.lance").exists()
+
+
+def test_doctor_passes_with_topology_none_and_no_index(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    runner.invoke(app, ["init", "--path", str(tmp_path), "--topology", "none"])
+    result = runner.invoke(app, ["doctor", "--path", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "indexing disabled" in result.output
+    assert "all local checks passed" in result.output

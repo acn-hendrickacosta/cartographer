@@ -36,6 +36,10 @@ RETURN b.path, b.attrs LIMIT 10
 
 Run these after identifying changed files from the diff. Review any files the KG shows are callers or importers — they are also in scope.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): `Grep` for the changed file's symbol names across the codebase to approximate callers
+and importers instead.
+
 When invoked:
 1. Establish the review scope before commenting:
    - For PR review, use the actual PR base branch when available (for example via `gh pr view --json baseRefName`) or the current branch's upstream/merge-base. Do not hard-code `main`.

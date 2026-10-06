@@ -2,7 +2,7 @@
 
 The Standards web app is a separate application from the CLI and the plugin. It lets SMEs author, review, and publish standards pack content into the Standards Registry without needing repo access or a CLI release cycle.
 
-This component is part of the standards distribution track, which is phased independently of Phase 1, 2, and 3. It does not ship until the three blocking open questions (OQ-08, OQ-09, OQ-10) are resolved. See [phases/standards-registry.md](../phases/standards-registry.md) for the full implementation plan.
+This component is part of the standards distribution track, which is phased independently of Phase 1, 2, and 3, and broken into sub-phases SR.1-SR.4. The three blocking open questions (OQ-08, OQ-09, OQ-10) were resolved 2026-10-05 -- see [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) closed questions. See [phases/standards-registry.md](../phases/standards-registry.md) for the full implementation plan.
 
 > This document is not the same as `cartographer ui`, which is a lightweight local knowledge browser built into the CLI for developers to inspect their own VDB and KG. See [components/cli.md](cli.md) for that command.
 
@@ -71,45 +71,51 @@ A published version is immutable. Corrections require a new draft with a new ver
 | Version history | `/packs/:packName/versions` | All |
 | Admin: user management | `/admin/users` | Admin |
 | Admin: pack management | `/admin/packs` | Admin |
+| Admin: registry tokens | `/admin/tokens` | Admin |
 
-Full screen flows, wireframes, and navigation are documented in [APPLICATION_ARCHITECTURE.md: Part 2](../APPLICATION_ARCHITECTURE.md).
+Added `/admin/tokens` 2026-10-05 alongside the CLI-fetch-goes-through-the-API correction -- an Admin needs somewhere to issue and revoke the per-project bearer tokens that gate `/api/packs/:name/content`. Full screen flows, wireframes, and navigation are documented in [APPLICATION_ARCHITECTURE.md: Part 2](../APPLICATION_ARCHITECTURE.md), updated to match.
 
 ---
 
-## 6. Infrastructure (AWS reference deployment)
+## 6. Infrastructure (reference deployment: EKS)
 
 | Concern | Service | Notes |
 |---|---|---|
-| Compute | Amazon ECS Fargate | Containerized application; no server management |
-| Load balancing | Application Load Balancer (ALB) | TLS termination; routes to ECS tasks |
-| Auth | Amazon Cognito | User pools for Author/Reviewer/Admin roles; JWT authorizer on ALB |
-| Persistent state | DynamoDB or RDS | Draft records, review state, published version index; choice per OQ-09 |
-| Pack storage | Amazon S3 | Immutable published pack objects keyed by `packs/<name>/<version>/standards.md` |
-| CDN | Amazon CloudFront | Serves S3 pack objects to CLI fetches globally |
+| Compute | Amazon EKS | Web app runs as a Kubernetes `Deployment` behind a `Service`; `HorizontalPodAutoscaler` for scale. Chosen 2026-10-05 so the web app is deployable on Kubernetes; see `ARCHITECTURE.md` §7.3 for the ECS-to-EKS rationale. |
+| Load balancing | Kubernetes `Ingress` (AWS Load Balancer Controller) | Provisions an ALB from the `Ingress` resource; TLS termination, routes to the Service's pods. |
+| Auth | Amazon Cognito | User pools for Author/Reviewer/Admin roles; JWT authorizer in front of the Ingress (or validated in-app) |
+| Persistent state | PostgreSQL -- same instance as the central VDB backend, separate database (`cartographer_webapp`) | Per-project registry API tokens (SR.2, shipped); draft records, review state, published version index (SR.3). Decided 2026-10-05 over DynamoDB specifically to avoid a second stateful service alongside Postgres. |
+| Pack storage | Amazon S3 (private) | Immutable published pack archives keyed by `packs/<name>/<version>/<content_type>.zip` (`content_type` is `standards`, `skills`, or `agents`, each independently optional per pack). No public access, no CDN in front of it -- see the correction note below. **SR.5 (2026-10-06):** a per-project fork lives at `projects/<project_id>/packs/<name>/fork/<content_type>.zip` -- same key shape, a separate prefix, a fixed marker version (`fork`) instead of a real semver. See §10. |
 
-The web app writes to S3 via an IAM role assigned to the ECS task. Developers and the CLI read from CloudFront. No direct S3 access for end users.
+The web app writes to S3 via IRSA (IAM Roles for Service Accounts) -- a Kubernetes `ServiceAccount` annotated with an IAM role, the EKS-native equivalent of an ECS task IAM role. Reads also go through the app (§7 `GET /api/packs/:name/content/:content_type`), never directly from S3.
+
+**Corrected 2026-10-05:** this section originally put a CloudFront CDN in front of a public-read S3 bucket, with the CLI fetching pack content directly from it -- no request-level authentication at all. That meant anyone with a pack's URL could read it, with no way to restrict or audit access. Removed. S3 is now private; every read (CLI or web app UI) goes through this application's own authenticated API.
 
 ---
 
 ## 7. API surface
 
-The web app exposes a REST API consumed by its own frontend. The CLI does not call the web app API -- the CLI reads directly from the CloudFront/S3 distribution.
+The web app exposes a REST API consumed by both its own frontend (Cognito JWT auth) and the CLI (per-project bearer token auth). **Corrected 2026-10-05:** this section previously stated "the CLI does not call the web app API -- the CLI reads directly from the CloudFront/S3 distribution." That's reversed now -- see `/api/packs/:name/content` below, and the correction note in §6.
 
-| Endpoint | Method | Role | Description |
+| Endpoint | Method | Auth | Description |
 |---|---|---|---|
-| `/api/packs` | GET | All | List all packs with latest published version |
-| `/api/packs/:name` | GET | All | Pack detail: published content, active draft |
-| `/api/packs/:name/drafts` | POST | Author | Create a new draft |
-| `/api/packs/:name/drafts/:id` | GET | Author, Reviewer | Get draft content and state |
-| `/api/packs/:name/drafts/:id` | PATCH | Author | Update draft content (DRAFT state only) |
-| `/api/packs/:name/drafts/:id/submit` | POST | Author | Submit for review (DRAFT -> IN REVIEW) |
-| `/api/packs/:name/drafts/:id/approve` | POST | Reviewer | Approve (IN REVIEW -> APPROVED) |
-| `/api/packs/:name/drafts/:id/reject` | POST | Reviewer | Reject with comment (IN REVIEW -> REJECTED) |
-| `/api/packs/:name/drafts/:id/publish` | POST | Reviewer | Publish to S3 (APPROVED -> PUBLISHED) |
-| `/api/packs/:name/versions` | GET | All | List all published versions |
-| `/api/packs/:name/versions/:version` | GET | All | Get a specific published version's content |
-| `/admin/users` | GET, POST, PATCH | Admin | User management |
-| `/admin/packs` | GET, POST, PATCH | Admin | Pack management |
+| `/api/packs` | GET | Cognito (All roles) | List all packs with latest published version |
+| `/api/packs/:name` | GET | Cognito (All roles) | Pack detail: published content, active draft |
+| `/api/packs/:name/content/:content_type` | GET | Bearer token (per-project) | **CLI's fetch endpoint.** Validates the token, reads the latest published version from S3 server-side, returns the zip archive directly (`Content-Type: application/zip`, `X-Pack-Version` response header). 401 if the token is missing/invalid, 404 if the pack has no published version of this content type. **SR.5:** if the calling project has forked this pack, serves the fork instead (`X-Pack-Version: fork`) -- transparent to the CLI, no config change needed. |
+| `/api/packs/:name/fork` | POST | Bearer token (per-project) | **SR.5.** Copies the pack's current baseline into this project's own namespace. 409 if already forked, 404 if the pack has no published baseline. |
+| `/api/packs/:name/fork/:content_type` | PUT | Bearer token (per-project) | **SR.5.** Pushes this project's current local content for one content type into its fork, wholesale-replacing what was there. 404 if no fork exists yet. |
+| `/api/packs/:name/drafts` | POST | Cognito (Author) | Create a new draft |
+| `/api/packs/:name/drafts/:id` | GET | Cognito (Author, Reviewer) | Get draft content and state |
+| `/api/packs/:name/drafts/:id` | PATCH | Cognito (Author) | Update draft content (DRAFT state only) |
+| `/api/packs/:name/drafts/:id/submit` | POST | Cognito (Author) | Submit for review (DRAFT -> IN REVIEW) |
+| `/api/packs/:name/drafts/:id/approve` | POST | Cognito (Reviewer) | Approve (IN REVIEW -> APPROVED) |
+| `/api/packs/:name/drafts/:id/reject` | POST | Cognito (Reviewer) | Reject with comment (IN REVIEW -> REJECTED) |
+| `/api/packs/:name/drafts/:id/publish` | POST | Cognito (Reviewer) | Publish to S3 (APPROVED -> PUBLISHED) |
+| `/api/packs/:name/versions` | GET | Cognito (All roles) | List all published versions |
+| `/api/packs/:name/versions/:version` | GET | Cognito (All roles) | Get a specific published version's content |
+| `/admin/users` | GET, POST, PATCH | Cognito (Admin) | User management |
+| `/admin/packs` | GET, POST, PATCH | Cognito (Admin) | Pack management |
+| `/admin/registry-tokens` | GET, POST, DELETE | Cognito (Admin) | Issue/revoke per-project bearer tokens for CLI access to `/api/packs/:name/content` |
 
 ---
 
@@ -131,11 +137,12 @@ If step 2 or 3 fails, the state is not updated to PUBLISHED and the operation ma
 
 | Concern | Control |
 |---|---|
-| Authentication | Cognito JWT; all API endpoints require a valid token |
+| Authentication | Cognito JWT for the web app's own frontend; per-project bearer token for the CLI (`/api/packs/:name/content` only). All API endpoints require one or the other -- there is no unauthenticated endpoint. |
 | Authorization | Role checked per endpoint; Author cannot approve own draft (enforced server-side, not only in UI) |
-| S3 write access | Only the ECS task's IAM role may write to the packs bucket; no pre-signed upload URLs issued to browsers |
+| Registry tokens | Opaque, randomly generated, stored hashed (not plaintext) in the persistent state store; scoped to a single project; revocable via `/admin/registry-tokens`; carry no role or human-user identity, only project scope |
+| S3 access | Only the web app's pod ServiceAccount (via IRSA) may read or write the packs bucket; no pre-signed URLs issued to the CLI or browsers -- the app always reads/writes S3 itself and returns bytes, never a direct S3 link |
 | Immutability | S3 object key includes the version number; overwriting a published version is prevented by S3 bucket policy |
-| Secrets | Cognito client IDs, database credentials, and S3 bucket names in AWS Secrets Manager; never in application config files |
+| Secrets | Cognito client IDs, database credentials, and S3 bucket names in AWS Secrets Manager, synced into the cluster via the Secrets Store CSI driver (or loaded directly by the app at startup); never in application config files or plain Kubernetes `Secret` manifests committed to a repo |
 
 ---
 
@@ -152,15 +159,33 @@ When the registry is configured, the CLI fetches from it. When unreachable, the 
 
 ---
 
-## 11. Open questions blocking this component
+## 10.5 Per-project forks (SR.5, 2026-10-06)
 
-| Question | Detail |
+A third channel, narrower than the two above: a single project can fork a pack into its own
+namespace in the registry (`projects/<project_id>/packs/<name>/fork/...`) and push local edits to
+it directly via the CLI (`cartographer stack fork <pack>` / `stack push <pack>`), bypassing the
+author/review/publish flow entirely -- the project's own bearer token is what gates who can push,
+since there's no multi-user review needed for a project's own copy of its own content.
+
+This is opt-in per project and per pack: a project's fetches hit the shared baseline exactly as
+described above until that project explicitly forks a specific pack, at which point its fetches for
+*that pack only* transparently prefer the fork (server-side, keyed off the same bearer token already
+used for every fetch -- no CLI config change). Forking is one-time; re-forking an already-forked pack
+is refused, and there's no "rebase onto newer baseline" operation -- picking up upstream changes into
+an existing fork is a manual, project-side task. See `phases/sr-5-project-forks.md` for the full
+design and verification record.
+
+---
+
+## 11. Open questions (resolved 2026-10-05)
+
+| Question | Decision |
 |---|---|
-| OQ-08 | Registry storage: S3, R2, or MinIO? |
-| OQ-09 | Auth and review model: one or two approvals? DynamoDB or RDS for draft state? |
-| OQ-10 | CLI fallback behavior when registry is configured but unreachable |
+| OQ-08 | S3, with an S3-compatible interface documented so R2/MinIO can substitute later |
+| OQ-09 | One approval required; any Reviewer other than the draft's own Author |
+| OQ-10 | Warn and fall back to bundled by default (`stacks.registry_fallback = "warn"`); `"error"` available as opt-in |
 
-None of these block documenting the component. All three must be resolved before implementation begins.
+See [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) closed questions for full rationale. Persistent state is Postgres (decided 2026-10-05, same instance as the central VDB backend) -- see `phases/sr-3-webapp-authoring-and-publish.md` and `ARCHITECTURE.md` §7.3.
 
 ---
 

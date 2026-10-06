@@ -80,41 +80,54 @@ def _hooks() -> dict:
 def run(
     path: Path = typer.Option(Path("."), "--path", help="Workspace root to initialize"),
     stacks: str = typer.Option("", "--stacks", help="Comma-separated stack packs, e.g. python,react"),
-    topology: str = typer.Option("", "--topology", help="local or central (default: preserve existing, or 'local' for new projects)"),
+    topology: str = typer.Option("", "--topology", help="local, central, or none (default: preserve existing, or 'local' for new projects)"),
     name: str = typer.Option("", "--name", help="Project name; defaults to the workspace directory name"),
 ) -> None:
     workspace = path.resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     project_name = name or workspace.name
 
+    # Load the existing config (if any) as the base for everything init.py
+    # doesn't explicitly own, so a re-run doesn't silently wipe fields set
+    # outside of init (registry_url, retrieval tuning, taxonomy version,
+    # federation overlays, etc.) -- this used to only special-case topology,
+    # which meant every other section was reset to defaults on every re-run.
+    existing_cfg: config_mod.CartographerConfig | None = None
+    if config_mod.config_exists(workspace):
+        try:
+            existing_cfg = config_mod.load_config(workspace)
+        except Exception:
+            existing_cfg = None
+
     # Resolve topology: explicit flag wins; otherwise preserve what's already in cartographer.toml;
     # fall back to "local" for brand-new projects.
     if not topology:
-        if config_mod.config_exists(workspace):
-            try:
-                existing_cfg = config_mod.load_config(workspace)
-                topology = existing_cfg.topology.mode
-            except Exception:
-                topology = "local"
-        else:
-            topology = "local"
+        topology = existing_cfg.topology.mode if existing_cfg else "local"
 
-    if topology not in ("local", "central"):
-        raise typer.BadParameter("topology must be 'local' or 'central'")
+    if topology not in ("local", "central", "none"):
+        raise typer.BadParameter("topology must be 'local', 'central', or 'none'")
+    indexing_enabled = topology != "none"
 
     console.print(f"[bold]cartographer init[/bold] at {workspace}")
 
-    _, claude_md_changed = claude_merge.ensure_claude_md(workspace)
+    claude_md_block = (
+        claude_merge.CARTOGRAPHER_CLAUDE_MD_BLOCK if indexing_enabled
+        else claude_merge.CARTOGRAPHER_CLAUDE_MD_BLOCK_NO_INDEX
+    )
+    _, claude_md_changed = claude_merge.ensure_claude_md(workspace, block=claude_md_block)
     console.print(f"  CLAUDE.md: {'updated' if claude_md_changed else 'already up to date'}")
 
-    _, settings_changed = claude_merge.ensure_settings_json(workspace, _hooks())
+    _, settings_changed = claude_merge.ensure_settings_json(workspace, _hooks() if indexing_enabled else {})
     console.print(f"  .claude/settings.json: {'updated' if settings_changed else 'already up to date'}")
 
-    _, mcp_changed = claude_merge.ensure_mcp_json(workspace, _mcp_servers(workspace))
+    _, mcp_changed = claude_merge.ensure_mcp_json(workspace, _mcp_servers(workspace) if indexing_enabled else {})
     console.print(f"  .mcp.json: {'updated' if mcp_changed else 'already up to date'}")
 
-    _install_skills(workspace)
-    console.print("  skills: archaeology installed (project); recall installed (project + ~/.claude global)")
+    if indexing_enabled:
+        _install_skills(workspace)
+        console.print("  skills: archaeology installed (project); recall installed (project + ~/.claude global)")
+    else:
+        console.print("  skills: archaeology/recall skipped (topology=none -- no index for them to use)")
 
     apply_pack(workspace, "cross-stack")
     console.print("  standards + skills + agents: cross-stack baseline applied")
@@ -125,17 +138,31 @@ def run(
         console.print(f"  standards + skills + agents: {pack_name} pack applied")
 
     project_id = compute_project_id(workspace)
-    local_dir = workspace / LOCAL_INDEX_REL
-    vdb.ensure_collection(local_dir / "vdb.lance", scope="local")
-    kg.ensure_namespace(local_dir / "kg.kuzu")
-    console.print(f"  local index provisioned at {local_dir}")
+    if indexing_enabled:
+        local_dir = workspace / LOCAL_INDEX_REL
+        vdb.ensure_collection(local_dir / "vdb.lance", scope="local")
+        kg.ensure_namespace(local_dir / "kg.kuzu")
+        console.print(f"  local index provisioned at {local_dir}")
+    else:
+        console.print(
+            "  local index: skipped (topology=none) -- existing .cartographer/local/, if any, is left untouched"
+        )
 
     active_stacks = sorted({"cross-stack", *requested_stacks})
-    cfg = config_mod.CartographerConfig(
-        project=config_mod.ProjectSection(id=project_id, name=project_name),
-        topology=config_mod.TopologySection(mode=topology),
-        stacks=config_mod.StacksSection(active=active_stacks),
-    )
+    if existing_cfg:
+        # Preserve everything init.py doesn't explicitly own. stacks.active is
+        # the one StacksSection field init.py computes itself (from --stacks);
+        # registry_url/registry_fallback carry over from the existing config.
+        cfg = existing_cfg.model_copy(deep=True)
+        cfg.project = config_mod.ProjectSection(id=project_id, name=project_name)
+        cfg.topology = config_mod.TopologySection(mode=topology)
+        cfg.stacks.active = active_stacks
+    else:
+        cfg = config_mod.CartographerConfig(
+            project=config_mod.ProjectSection(id=project_id, name=project_name),
+            topology=config_mod.TopologySection(mode=topology),
+            stacks=config_mod.StacksSection(active=active_stacks),
+        )
     config_mod.save_config(workspace, cfg)
     console.print(f"  {config_mod.CONFIG_FILENAME} written")
 

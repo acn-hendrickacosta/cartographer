@@ -136,6 +136,11 @@ vdb_search("JSDoc inline comment convention [framework]")
 
 A comment that says "called only by X" is stale if the KG shows additional callers. A comment referencing a module that no longer appears in import edges is dead documentation. Cross-reference every claim in a comment against the KG before rating it as accurate.
 
+**If `kg_query`/`vdb_search` are not in your available tools** (this project has indexing
+disabled): `Grep` for the symbol/module a comment names its callers/dependents against, and treat
+Step 2's pattern scans below as your primary (not supplementary) method for finding files to scan —
+start from `Glob` over the project's source directories instead of a knowledge-index result set.
+
 ### Step 2: Pattern scans for things the KG cannot detect
 
 Scan only the files the knowledge index identified:

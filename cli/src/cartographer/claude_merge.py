@@ -71,6 +71,20 @@ Do not edit the content between these markers by hand.
 {END_MARKER}
 """
 
+CARTOGRAPHER_CLAUDE_MD_BLOCK_NO_INDEX = f"""{BEGIN_MARKER}
+## Cartographer standards
+
+This project uses Cartographer's standards, skills, and agents packs, without the KG/VDB knowledge
+index (`topology = "none"`). Standards live under `.claude/standards/`.
+
+Skills and agents that reference KG/VDB lookups (`vdb_search`, `kg_query`, `kg_neighbors`) won't have
+those tools available in this project -- fall back to `Read`/`Grep`/`Glob` for anything they'd
+otherwise have looked up.
+
+Do not edit the content between these markers by hand.
+{END_MARKER}
+"""
+
 
 @dataclass
 class DetectionEntry:
@@ -147,11 +161,17 @@ def backup(path: Path, workspace: Path) -> Path | None:
     return backup_path
 
 
-def ensure_claude_md(workspace: Path) -> tuple[Path, bool]:
-    """Create or additively update CLAUDE.md. Returns (path, changed)."""
+def ensure_claude_md(workspace: Path, block: str = CARTOGRAPHER_CLAUDE_MD_BLOCK) -> tuple[Path, bool]:
+    """Create or additively update CLAUDE.md. Returns (path, changed).
+
+    `block` defaults to the standard VDB/KG-mandatory block; callers with
+    indexing disabled (topology="none") pass CARTOGRAPHER_CLAUDE_MD_BLOCK_NO_INDEX
+    instead, which drops the VDB/KG mandate (there's no index behind it) but
+    keeps the standards pointer.
+    """
     path = workspace / CLAUDE_MD_NAME
     if not path.exists():
-        path.write_text(f"# Project instructions\n\n{CARTOGRAPHER_CLAUDE_MD_BLOCK}", encoding="utf-8")
+        path.write_text(f"# Project instructions\n\n{block}", encoding="utf-8")
         return path, True
 
     text = path.read_text(encoding="utf-8")
@@ -160,7 +180,7 @@ def ensure_claude_md(workspace: Path) -> tuple[Path, bool]:
         start = text.index(BEGIN_MARKER)
         end = text.index(END_MARKER) + len(END_MARKER)
         existing_block = text[start:end]
-        new_block = CARTOGRAPHER_CLAUDE_MD_BLOCK.strip()
+        new_block = block.strip()
         if existing_block == new_block:
             return path, False
         backup(path, workspace)
@@ -169,7 +189,7 @@ def ensure_claude_md(workspace: Path) -> tuple[Path, bool]:
 
     backup(path, workspace)
     separator = "\n\n" if not text.endswith("\n\n") else ""
-    path.write_text(text + separator + CARTOGRAPHER_CLAUDE_MD_BLOCK, encoding="utf-8")
+    path.write_text(text + separator + block, encoding="utf-8")
     return path, True
 
 

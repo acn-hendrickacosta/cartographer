@@ -4,9 +4,24 @@
 
 An SME authors a new version of a standards pack in the web app, it passes review, and a project's next `cartographer stack add` picks it up -- with no CLI release and no PR to the Cartographer repository.
 
-This track runs independently of Phase 1, 2, and 3. It is a packaging and authoring concern, not a KG/VDB concern. It can start after Phase 1 is stable and the three blocking open questions (OQ-08, OQ-09, OQ-10) are resolved.
+This track runs independently of Phase 1, 2, and 3. It is a packaging and authoring concern, not a KG/VDB concern.
 
-**Entry condition:** Phase 1 is complete. OQ-08 (registry storage), OQ-09 (web app auth and review model), and OQ-10 (CLI fallback behavior) are resolved.
+**Entry condition:** Phase 1 is complete (satisfied). OQ-08, OQ-09, and OQ-10 resolved (satisfied, 2026-10-05 -- see [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) closed questions). The track is unblocked; see the sub-phase table below for where implementation actually starts.
+
+---
+
+## Alignment check (2026-10-05)
+
+Audited this document against the current codebase before any implementation work, per the project's standard practice of re-verifying phase-doc assumptions rather than trusting them at face value. Findings:
+
+- **Confirmed accurate, unchanged:** `APPLICATION_ARCHITECTURE.md` Part 2 (screen inventory, roles, pack version lifecycle) still matches this document's design.
+- **Changed 2026-10-05 (after this audit):** the web app's compute target moved from ECS Fargate to EKS, so it's deployable on Kubernetes -- see `ARCHITECTURE.md` §7.3's rationale note. AWS managed services (Cognito, S3) are unchanged; only the orchestration layer changed. `components/standards-webapp.md` and SR.2's infrastructure section are updated to match. Persistent state (registry tokens, and from SR.3 draft/review records) was later decided to be Postgres -- the same instance the central VDB backend already uses -- rather than DynamoDB, specifically to avoid a second stateful service; see `ARCHITECTURE.md` §7.3's Postgres rationale note.
+- **Changed 2026-10-05, more significant (after the EKS change, reviewed by Hendrick):** the original design had the CLI fetch pack content directly from a public-read S3 bucket via CloudFront, with no request-level authentication -- anyone with a pack's URL could read it, with no way to audit or restrict access. Fixed: S3 is now private; every read (CLI and web app UI alike) goes through the web app's own authenticated API (`GET /api/packs/:name/content`), gated by a per-project bearer token for the CLI (same pattern as `promotion_token`). This reordered the sub-phases below -- CLI registry fetch moved from SR.1 to SR.2, since it now depends on the web app's API existing, not just S3. See `ARCHITECTURE.md` §7.2's correction note and `components/standards-webapp.md` §6-7, 9, 11.
+- **Fixed:** `components/standards-packs.md` and `CONFIGURATION.md`'s `[stacks]` comment both documented only 2 bundled packs (`python`, `react`); the CLI actually bundles 12 (`cross-stack`, `python`, `react`, `typescript`, `golang`, `rust`, `java`, `kotlin`, `angular`, `vue`, `swift`, `dart`, per `stack.py`'s `KNOWN_PACKS`). Both docs corrected -- this matters for SR.1's bundled-pack migration step, which migrates 12 packs, not 2.
+- **Fixed (more significant):** `components/cli.md`'s `stack add` section described the registry-fetch-with-fallback logic as *already shipped, current* `stack add` behavior. It is not -- `stack.py` has no registry-fetch code as of this writing; packs are always resolved from the bundled install. Corrected to describe current (bundled-only) behavior with a "planned, not yet implemented" pointer back to this track; SR.1 is where that note gets removed.
+- **Fixed (broader, found in the same pass):** `CONFIGURATION.md`, `cartographer.example.toml`, `DATA_MODEL.md`, and `OPEN_QUESTIONS.md` had significant unrelated config documentation drift -- stale `[vdb]`/`[kg]`/`[embedder]`/`[ingestion]`/`[recall]`/`[registry]` sections that `config.py` never reads, a fabricated generic env-var derivation rule, a `doctor` validation list that didn't match `doctor.py`, and a per-machine registry documented as a configurable SQLite `.db` when it's actually a hardcoded JSON file. All corrected 2026-10-05, predates and is unrelated to this track, but was blocking an accurate read of what's real vs. planned.
+- **Investigated and ruled out:** the screen table in this document included "Publish confirmation (modal)" which `APPLICATION_ARCHITECTURE.md`'s §2.4 screen inventory table omits. Not a real discrepancy -- that table only lists routable screens (it has a Path column), and the modal is documented in §2.5's flows. No action needed.
+- **OQ-08/09/10 resolved 2026-10-05** specifically to unblock writing concrete sub-phase docs instead of leaving fetch/auth/fallback behavior as "TBD, see open question" in every sub-phase. See [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) closed questions for the decisions and rationale.
 
 ---
 
@@ -16,8 +31,9 @@ This track runs independently of Phase 1, 2, and 3. It is a packaging and author
 |---|---|
 | [ARCHITECTURE.md](../ARCHITECTURE.md) | Section 6: standards distribution phasing |
 | [APPLICATION_ARCHITECTURE.md](../APPLICATION_ARCHITECTURE.md) | Part 2: web app screen inventory, user roles, pack version lifecycle |
-| [components/standards-packs.md](../components/standards-packs.md) | Pack structure, versioning, current bundled distribution |
-| [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) | OQ-08, OQ-09, OQ-10: must be resolved before this track starts |
+| [components/standards-packs.md](../components/standards-packs.md) | Pack structure, versioning, current bundled distribution (12 packs) |
+| [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) | OQ-08, OQ-09, OQ-10: resolved 2026-10-05, see closed questions |
+| [CONFIGURATION.md](../CONFIGURATION.md) | `[stacks]` section -- `registry_url`/`registry_fallback` are added to the schema in SR.2, not before (SR.1 has no CLI changes at all) |
 
 ---
 
@@ -25,213 +41,39 @@ This track runs independently of Phase 1, 2, and 3. It is a packaging and author
 
 ### In scope
 
-| Component | What ships |
-|---|---|
-| Standards Registry (S3) | Versioned S3 bucket; immutable pack version objects; CloudFront CDN for distribution |
-| Standards web app | ECS Fargate + ALB; Cognito auth; authoring, review, and publish flows |
-| CLI registry fetch | `stack add` and `init` fetch from registry; fall back to bundled on failure |
-| CLI fallback behavior | Configurable via `stacks.registry_fallback` (`warn` or `error`) per OQ-10 |
-| Pack version schema | Version object format stored in S3; readable by CLI |
-
-### Explicitly out of scope
-
-- Migrating existing bundled packs to the registry automatically (done manually as a one-time task)
-- Registry-to-registry federation or multi-tenant registry
-- CLI authoring tools (the web app is the authoring interface)
-
----
-
-## Component breakdown
-
-### 1. Standards Registry (S3)
-
-**Infrastructure (AWS reference deployment):**
-- S3 bucket with versioning enabled
-- Bucket policy: public read for published objects; write restricted to the web app's IAM role
-- CloudFront distribution in front of S3 for low-latency global reads
-- Object key structure: `packs/<pack-name>/<version>/standards.md`
-- Index object: `packs/<pack-name>/latest.json` -- points to the latest published version
-
-**Pack version object format:**
-
-```json
-{
-  "pack":        "python",
-  "version":     "2.2.0",
-  "published_at": "2026-09-24T10:00:00Z",
-  "published_by": "a.patel@example.com",
-  "changelog":   "Added async section; updated testing conventions.",
-  "content_url": "https://cdn.example.com/packs/python/2.2.0/standards.md"
-}
-```
-
-`latest.json` for each pack:
-
-```json
-{
-  "pack":    "python",
-  "version": "2.2.0",
-  "url":     "https://cdn.example.com/packs/python/2.2.0/standards.md"
-}
-```
-
----
-
-### 2. Standards web app
-
-**Infrastructure:**
-- ECS Fargate task running the web app container
-- Application Load Balancer (ALB) in front of ECS
-- Cognito user pool for authentication (user pools for Author, Reviewer, Admin roles)
-- DynamoDB or RDS for draft state, review records, and version index (resolve per OQ-09)
-- S3 write access via IAM role assigned to the ECS task (for publish operations)
-
-**Screens and flows to implement** (full detail in [APPLICATION_ARCHITECTURE.md Part 2](../APPLICATION_ARCHITECTURE.md)):
-
-| Screen | Status |
-|---|---|
-| Login (`/login`) | Cognito hosted UI or embedded form |
-| Dashboard (`/`) | Pack list, latest versions, draft counts |
-| Pack detail (`/packs/:packName`) | Published content, active draft, version history link |
-| Pack editor (`/packs/:packName/drafts/:draftId/edit`) | Split-pane markdown editor, diff toggle, submit for review |
-| Review queue (`/review`) | Drafts in IN REVIEW state |
-| Review screen (`/review/:draftId`) | Side-by-side diff, inline comments, approve/reject |
-| Publish confirmation (modal) | Confirm publish or defer |
-| Version history (`/packs/:packName/versions`) | All published versions, diff between any two |
-| Admin: user management (`/admin/users`) | Role assignment |
-| Admin: pack management (`/admin/packs`) | Create new pack names, deprecate packs |
-
-**Pack version lifecycle** (full state machine in [APPLICATION_ARCHITECTURE.md](../APPLICATION_ARCHITECTURE.md)):
-```
-DRAFT -> IN REVIEW -> APPROVED -> PUBLISHED
-                  \-> REJECTED -> DRAFT (revised)
-```
-
-**Publish operation:**
-- Triggered after a Reviewer approves and confirms publish
-- Web app writes `standards.md` to `s3://packs/<name>/<version>/standards.md`
-- Web app writes/updates `s3://packs/<name>/latest.json`
-- State transitions to PUBLISHED; record is immutable from this point
-
----
-
-### 3. CLI registry fetch (update to `stack add` and `init`)
-
-**Changes to `cartographer stack add`:**
-1. If `stacks.registry_url` is configured: fetch `<registry_url>/packs/<name>/latest.json`
-2. Parse the version and `content_url`
-3. Fetch `standards.md` from `content_url`
-4. If fetch succeeds: write to `.claude/standards/<name>/standards.md`; record fetched version
-5. If fetch fails:
-   - `stacks.registry_fallback = "warn"` (default): log warning with URL and error; use bundled version
-   - `stacks.registry_fallback = "error"`: exit `1` with error message
-6. If `stacks.registry_url` is not configured: use bundled version (current behavior, unchanged)
-
-**Changes to `cartographer init`:**
-- Same registry fetch logic applies when `--stack <name>` is passed
-- Bundled version is always the fallback
-
-**Config additions:**
-
-```toml
-[stacks]
-registry_url = "https://cdn.example.com"        # URL of the Standards Registry CDN
-registry_fallback = "warn"                       # "warn" or "error" on registry fetch failure
-```
-
-**Reference:** [CONFIGURATION.md](../CONFIGURATION.md), [components/cli.md: stack add](../components/cli.md)
-
----
-
-## Build order
-
-```
-1. Resolve OQ-08 (registry storage), OQ-09 (auth model), OQ-10 (fallback behavior)
-2. Provision S3 bucket and CloudFront distribution (infrastructure)
-3. Define pack version object schema (JSON schema document)
-4. Publish first pack versions manually to S3 (python, react, cross-stack current versions)
-5. CLI registry fetch (stack add + init updates)
-6. CLI regression test: registry unreachable falls back to bundled correctly
-7. Web app: Cognito setup + auth screens
-8. Web app: dashboard + pack detail (read-only views)
-9. Web app: pack editor (draft create/edit)
-10. Web app: review queue + review screen
-11. Web app: publish flow (writes to S3)
-12. Web app: admin screens
-13. End-to-end test: author -> review -> publish -> CLI picks up
-```
-
----
-
-## Open questions to resolve before starting
-
-| Question | Blocks |
-|---|---|
-| OQ-08: Registry storage (S3 vs R2 vs MinIO) | Infrastructure provisioning (step 2) |
-| OQ-09: Web app auth and review model (one vs two approvals; role assignment) | Cognito setup; review screen spec |
-| OQ-10: CLI fallback behavior (`warn` vs `error`) | `stack add` and `init` implementation (step 5) |
-
----
-
-## Exit criteria
-
-| # | Criterion | How to verify |
+| Component | What ships | Sub-phase |
 |---|---|---|
-| 1 | An SME can log into the web app, create a draft version of the Python pack, and submit it for review | Walk through the author flow end to end |
-| 2 | A Reviewer can view the draft, add a comment, and approve it | Walk through the review flow end to end |
-| 3 | After approval, the Reviewer publishes the new version to the Standards Registry | Confirm the pack object appears in S3 with the correct key and `latest.json` is updated |
-| 4 | `cartographer stack add python` on a project with `stacks.registry_url` configured fetches the newly published version | Run `stack add python`; inspect `.claude/standards/python/standards.md`; confirm it contains the content from the published version |
-| 5 | `cartographer stack add python` when the registry is unreachable falls back to the bundled version and logs a warning | Block the registry URL; run `stack add python`; confirm bundled version is installed and warning is printed |
-| 6 | `cartographer init --stack python` with registry configured fetches from the registry | Run `init`; confirm fetched version is written, not the bundled version |
-| 7 | A published version is immutable: editing a published version in the web app is not possible | Attempt to edit a published version in the UI; confirm the editor is read-only |
-| 8 | Version history shows all published versions with correct metadata | Navigate to `/packs/python/versions`; confirm all published versions appear in order |
+| Standards Registry (S3, private) | Versioned S3 bucket, no public access; immutable pack version objects (zip + metadata); admin publish script for bootstrap/migration | SR.1 |
+| Standards web app: auth + read views + registry API | Cognito; login, dashboard, pack detail, version history; `GET /api/packs/:name/content` (bearer-token authenticated) | SR.2 |
+| CLI registry fetch | `stack add` and `init` fetch via the authenticated API; fall back to bundled on failure (`stacks.registry_fallback`, OQ-10) | SR.2 |
+| Standards web app: authoring, review, publish | Pack editor, review queue/screen (one-approval, OQ-09), publish flow | SR.3 |
+| Standards web app: admin | User management, pack management, registry token issuance/revocation | SR.4 |
+| Per-project forks | A project can fork a pack into its own namespace in the registry and push local edits to it via the CLI, diverging from the global baseline | SR.5 |
+
+### Explicitly out of scope (the whole track)
+
+- Migrating existing bundled packs to the registry via anything other than a one-time manual/scripted task (SR.1) -- not automated, not repeated
+- Registry-to-registry federation or multi-tenant registry **except the specific, narrow form added in SR.5** (per-project forks of individual packs, opt-in, CLI-push-only, no review gate) -- this line originally ruled out multi-tenancy entirely; SR.5 reopened it by explicit request on 2026-10-06, deliberately, not as scope creep discovered mid-implementation
+- CLI authoring tools (the web app is the authoring interface) -- still true for the global baseline; SR.5's `stack push` is a narrow exception for a project's own fork, not a general authoring tool
+- Per-pack author/reviewer assignment -- OQ-09's resolved decision is global roles
 
 ---
 
-## Test approach
+## Sub-phases
 
-### Web app tests
+| Pass | Document | Scope | Entry condition |
+|---|---|---|---|
+| SR.1 | [sr-1-registry-infrastructure.md](sr-1-registry-infrastructure.md) | Private S3 registry infrastructure, pack version schema, bundled-pack migration via a throwaway admin script. No CLI or web app changes -- nothing here is network-reachable outside an operator's own AWS credentials. | **Complete 2026-10-05.** Bucket live at `cartographer-standards-registry-983883745126` (`us-east-1`), all 12 packs migrated, all exit criteria verified against the real bucket. |
+| SR.2 | [sr-2-webapp-auth-and-read-views.md](sr-2-webapp-auth-and-read-views.md) | Web app: Cognito auth, login, dashboard, pack detail, version history (read-only); the authenticated `GET /api/packs/:name/content` endpoint; and CLI registry fetch (`stack add`/`init --stack`) against it | SR.1 complete |
+| SR.3 | [sr-3-webapp-authoring-and-publish.md](sr-3-webapp-authoring-and-publish.md) | Web app: pack editor, review queue/screen, publish flow -- closes the full authoring loop | SR.2 complete. **Complete 2026-10-06.** |
+| SR.4 | [sr-4-webapp-admin.md](sr-4-webapp-admin.md) | Web app: user management, pack management (create/deprecate pack names), registry token issuance/revocation | SR.3 complete. **Complete 2026-10-06.** |
+| SR.5 | [sr-5-project-forks.md](sr-5-project-forks.md) | Per-project forks: a project copies a pack into its own registry namespace and pushes local edits to it via the CLI, opt-in, no review gate | SR.4 complete. **Complete 2026-10-06.** Added after the original track scope was set, by explicit request -- see the sub-phase doc's "Design decisions" section. |
 
-**Unit tests** (web app backend):
-- Pack version state machine transitions: each valid and invalid transition
-- Publish operation: correct S3 key structure; `latest.json` update; state set to PUBLISHED
-- Auth middleware: Author cannot approve their own draft; cross-role access returns 403
+**Why this order:** SR.1 is fully independent and provable without any web app or any network-reachable fetch path -- it proves the registry schema using a throwaway admin publish script, nothing more. SR.2 is now where the web app's API and CLI fetch are both built together, since CLI fetch requires that authenticated API to exist (it cannot be tested against raw S3 anymore -- see the alignment check above). SR.3 is where the track's actual goal is demonstrated end to end. SR.4 is pure management tooling around an already-working loop -- including the registry tokens SR.2 had to hand-seed -- and carries the least risk, so it's last among the originally-scoped sub-phases. SR.5 came after the original four and depends on SR.2's content API and SR.4's token model both already existing -- it reuses the project-scoped bearer token unchanged.
 
-**Integration tests** (web app + S3):
-- Create draft -> submit -> approve -> publish; verify S3 objects exist with correct content
-- Fetch `latest.json` after publish; verify version and URL are correct
+### Exit criteria
 
-**Browser tests** (Playwright or Cypress):
-- Author flow: login -> create draft -> edit -> submit for review
-- Review flow: login as Reviewer -> open review queue -> approve -> publish
-- Read-only verification: published version editor is disabled
-
-### CLI registry fetch tests
-
-**Unit tests:**
-- Registry URL configured + successful fetch: correct version installed
-- Registry URL configured + fetch fails + `registry_fallback = "warn"`: bundled version installed, warning logged
-- Registry URL configured + fetch fails + `registry_fallback = "error"`: exit `1`
-- Registry URL not configured: bundled version installed, no network call made
-
-**Integration tests:**
-- Mock S3 endpoint (using a local HTTP server or LocalStack): full `stack add` flow against a real-shape response
-
-### End-to-end acceptance test
-
-```
-1. Author logs into the web app
-2. Creates a new draft of the Python pack with a recognizable change
-   (add a distinctive line to standards.md)
-3. Submits for review
-4. Reviewer logs in, reviews, and approves
-5. Reviewer publishes
-6. Run: cartographer stack add python  (registry_url configured)
-7. Open .claude/standards/python/standards.md
-8. Confirm the distinctive line from step 2 is present
-```
-
-Pass criterion: step 8 confirms the published content is present. The entire loop from authoring to CLI delivery is verified.
+**Complete 2026-10-06: all five sub-phases pass.** See each sub-phase document for its own detailed exit criteria and test approach -- they are not duplicated here. The track's single most important exit criterion (SR.3's end-to-end acceptance test: author → review → publish → CLI delivery, demonstrated live) is the same goal stated at the top of this document. The one item not yet done is deploying to the org's actual shared EKS cluster (this environment only proved it against Docker Desktop's local Kubernetes / a plain local process) -- see SR.2's status note; this is an infra/ops step, not a remaining functional gap in the track itself.
 
 ---
 

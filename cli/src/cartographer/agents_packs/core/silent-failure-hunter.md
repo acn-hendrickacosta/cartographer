@@ -38,6 +38,10 @@ vdb_search("error handling pattern [language/framework] propagation")
 
 Trace each error-throwing function forward through the KG — if the call chain ends without a handler, that is a silent failure. Use this to prioritize which files to read.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): skip Step 1 and start directly with Step 2's pattern scans below — they're already
+`grep`-based and don't depend on the KG; they become your primary method, not a supplement.
+
 ### Step 2: Pattern-based scans for things the KG cannot detect
 
 ## Hunt Targets

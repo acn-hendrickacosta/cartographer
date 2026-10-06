@@ -54,6 +54,11 @@ RETURN b.path, b.attrs LIMIT 20
 
 Zero KG results for a symbol means it has no known structural dependents. Non-zero results means read those files before proceeding. **Never remove what the KG shows is still referenced.**
 
+**If `kg_query` is not in your available tools** (this project has indexing disabled): skip Step 1
+and start at Step 2 — static analysis plus `grep` for the symbol/module name across the codebase is
+your primary dead-code signal instead of a supplement to it. The same rule applies: zero hits means
+low-risk to remove; any hit means read those files first, same as a non-zero KG result would.
+
 ### Step 2: Run static analysis to catch what KG misses
 
 The KG uses AST-extracted edges and may miss dynamic access patterns. Static analysis tools complement it:

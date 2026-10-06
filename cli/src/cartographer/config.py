@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 CONFIG_FILENAME = "cartographer.toml"
 LOCAL_CONFIG_FILENAME = "cartographer.local.toml"
 
-Topology = Literal["local", "central"]
+Topology = Literal["local", "central", "none"]
 PromotionTrigger = Literal["post-merge-hook", "ci", "manual"]
 EmbedderDriver = Literal["local", "api"]
 
@@ -56,8 +56,13 @@ class IsolationSection(BaseModel):
     tenant: str = "default"
 
 
+RegistryFallback = Literal["warn", "error"]
+
+
 class StacksSection(BaseModel):
     active: list[str] = Field(default_factory=list)
+    registry_url: str = ""  # "" = unset/bundled-only. Not str | None: tomlkit cannot serialize None.
+    registry_fallback: RegistryFallback = "warn"
 
 
 class CentralSection(BaseModel):
@@ -142,6 +147,7 @@ class LocalOverrideConfig(BaseModel):
     central_kg: CentralKgConfig = Field(default_factory=CentralKgConfig)
     promotion_token: str = ""
     anthropic_api_key: str = ""  # Phase 4 kg_search: direct Claude API call, not a recursive MCP call
+    registry_token: str = ""  # SR.2: per-project bearer token for the Standards Registry's authenticated content API
 
     def to_toml(self) -> str:
         doc = tomlkit.document()
@@ -154,6 +160,8 @@ class LocalOverrideConfig(BaseModel):
             doc["promotion_token"] = self.promotion_token
         if self.anthropic_api_key:
             doc["anthropic_api_key"] = self.anthropic_api_key
+        if self.registry_token:
+            doc["registry_token"] = self.registry_token
         return tomlkit.dumps(doc)
 
 
@@ -209,6 +217,7 @@ def load_local_override(workspace: Path) -> LocalOverrideConfig:
             central_kg=CentralKgConfig(**data.get("central_kg", {})),
             promotion_token=str(data.get("promotion_token", "")),
             anthropic_api_key=str(data.get("anthropic_api_key", "")),
+            registry_token=str(data.get("registry_token", "")),
         )
     else:
         override = LocalOverrideConfig()
@@ -247,6 +256,9 @@ def _apply_env_overrides(override: LocalOverrideConfig) -> None:
         # Fall back to the standard SDK-wide env var name so kg_search works
         # out of the box for anyone who already has this set for other tools.
         override.anthropic_api_key = env["ANTHROPIC_API_KEY"]
+
+    if env.get("CARTO_REGISTRY_TOKEN"):
+        override.registry_token = env["CARTO_REGISTRY_TOKEN"]
 
 
 def save_local_override(workspace: Path, override: LocalOverrideConfig) -> Path:

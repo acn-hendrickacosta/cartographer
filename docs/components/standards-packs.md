@@ -19,6 +19,17 @@ Packs cover practices that apply at the stack level: how to structure code, how 
 | `cross-stack` | All projects | Bundled, stable | Always applied at `cartographer init` |
 | `python` | Python projects | Bundled, stable | `--stack python` at init or `cartographer stack add python` |
 | `react` | React projects | Bundled, stable | `--stack react` at init or `cartographer stack add react` |
+| `typescript` | TypeScript projects | Bundled, stable | `--stack typescript` at init or `cartographer stack add typescript` |
+| `golang` | Go projects | Bundled, stable | `--stack golang` at init or `cartographer stack add golang` |
+| `rust` | Rust projects | Bundled, stable | `--stack rust` at init or `cartographer stack add rust` |
+| `java` | Java projects | Bundled, stable | `--stack java` at init or `cartographer stack add java` |
+| `kotlin` | Kotlin projects | Bundled, stable | `--stack kotlin` at init or `cartographer stack add kotlin` |
+| `angular` | Angular projects | Bundled, stable | `--stack angular` at init or `cartographer stack add angular` |
+| `vue` | Vue projects | Bundled, stable | `--stack vue` at init or `cartographer stack add vue` |
+| `swift` | Swift projects | Bundled, stable | `--stack swift` at init or `cartographer stack add swift` |
+| `dart` | Dart projects | Bundled, stable | `--stack dart` at init or `cartographer stack add dart` |
+
+This table is the authoritative pack list — it must match `KNOWN_PACKS` in `cli/src/cartographer/commands/stack.py` exactly. It previously listed only `cross-stack`, `python`, and `react`, which went stale as the other 9 packs were added without this doc being updated; corrected 2026-10-05 during the Standards Registry phase-doc audit.
 
 More packs are added by contributors. See [CONTRIBUTING.md](../CONTRIBUTING.md) for how to add one.
 

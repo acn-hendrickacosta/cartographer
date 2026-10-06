@@ -2,34 +2,36 @@
 
 This document describes every configuration knob Cartographer exposes, the two-file config model, the environment variable override layer, and the rules for what belongs in each.
 
+*Rewritten 2026-10-05 against the actual `config.py` schema (`CartographerConfig`/`LocalOverrideConfig`) after an audit surfaced significant drift between this document and the code -- see the note at the end of each section below for what changed.*
+
 ---
 
 ## 1. Config file model
 
-Cartographer uses two TOML files per project and an environment variable layer on top.
+Cartographer uses two TOML files per project and a narrow environment variable override layer on top of one of them.
 
 | File | Committed | Purpose |
 |---|---|---|
-| `cartographer.toml` | Yes | Shared project settings: topology, drivers, stacks, ingestion and recall tuning. Safe to commit. Contains no secrets. |
-| `.cartographer.local.toml` | No (gitignored) | Per-developer overrides: central backend endpoints, API keys, local path overrides. Never committed. |
-
-On top of these, environment variables prefixed with `CARTO_` override any value from either file. This is the recommended path for CI and production environments where secrets are injected by the platform.
+| `cartographer.toml` | Yes | Shared project settings: topology, stacks, promotion trigger, tenant isolation, retrieval tuning, backend driver selection, taxonomy, federation. Safe to commit. Contains no secrets. |
+| `cartographer.local.toml` | No (gitignored) | Per-developer overrides: central backend connection details, API keys, local path overrides. Never committed. |
 
 **Precedence (highest to lowest):**
 ```
-CARTO_* environment variables
-  -> .cartographer.local.toml
-    -> cartographer.toml
+CARTO_* environment variables   (only override cartographer.local.toml fields -- see Section 4)
+  -> cartographer.local.toml    (gitignored, per-developer)
+    -> cartographer.toml        (committed)
       -> built-in defaults
 ```
 
-`cartographer.toml` is located by walking up from the current working directory until it is found or the filesystem root is reached. This means commands can be run from any subdirectory of the project.
+`cartographer.toml` is located at the workspace root passed to each command (`config_path(workspace)` / `local_config_path(workspace)` in `config.py`). Unlike some tools, the CLI does not currently walk up parent directories looking for it.
+
+> **Correction:** the previous version of this document claimed *every* config value can be overridden by a `CARTO_` environment variable, derived mechanically from the TOML path. That was never true. Only `cartographer.local.toml`'s fields have an environment override, and only the specific ones wired in `config.py`'s `_apply_env_overrides()` -- see Section 4.
 
 ---
 
 ## 2. `cartographer.toml` reference
 
-This file is committed to the repository. All values here are safe to share with the team.
+This file is committed to the repository. All values here are safe to share with the team. The fields below are exactly what `config.py`'s `CartographerConfig` model reads -- nothing more. `cartographer init` generates this file for you (see `CartographerConfig.to_toml()`); you do not need to write it by hand.
 
 ### [project]
 
@@ -40,11 +42,9 @@ id = "a3f2c1d4-8b9e-4f2a-b3c1-d4e5f6a7b8c9"
 
 # Human-readable project name. Defaults to the root directory name.
 name = "my-project"
-
-# Tenant or client identifier. Cross-project recall never crosses a tenant boundary.
-# Use a consistent slug across all projects for the same client.
-tenant = "internal"
 ```
+
+> **Correction:** `tenant` does not live here. It moved to `[isolation]` below.
 
 ### [topology]
 
@@ -53,224 +53,196 @@ tenant = "internal"
 # "local"   -- local VDB and KG only. No central backend. No promotion.
 # "central" -- local per developer plus a configured central backend. Promotion on merge.
 mode = "local"
-
-# Promotion trigger. Only applies when mode = "central".
-# "ci"               -- a CI step runs cartographer promote on merge to main. Recommended.
-# "post-merge-hook"  -- a git post-merge hook runs cartographer promote on the developer's machine.
-# "manual"           -- promotion only runs when cartographer promote is invoked explicitly.
-promotion_trigger = "ci"
 ```
+
+> **Correction:** `promotion_trigger` does not live here. It moved to `[promotion]` below (and the field is named `trigger`, not `promotion_trigger`).
 
 ### [stacks]
 
 ```toml
 [stacks]
 # Stack packs active for this project. Applied at init and available to stack add.
-# Supported values: "python", "react". Contributors add more.
+# Supported values: "cross-stack", "python", "react", "typescript", "golang", "rust",
+# "java", "kotlin", "angular", "vue", "swift", "dart". Contributors add more.
 active = ["python"]
 
-# URL of the Standards Registry to fetch pack versions from.
-# When unset, cartographer uses bundled pack versions shipped with the CLI.
-# When set but unreachable, cartographer falls back to bundled versions and logs a warning.
+# Standards Registry (SR.2, implemented 2026-10-05): base URL of the
+# Standards web app's API. When set, stack add / init --stack fetch pack
+# content from <registry_url>/api/packs/<name>/content, authenticated with
+# the bearer token in cartographer.local.toml's registry_token. When
+# unreachable or the token is invalid, falls back to bundled per
+# registry_fallback. When unset, bundled versions are always used.
+# See docs/phases/sr-2-webapp-auth-and-read-views.md. The web app itself is
+# not yet built as of this writing -- there's nothing to point this at in
+# production yet, but the CLI-side fields and fetch logic are implemented.
 # registry_url = "https://standards.example.com"
+# registry_fallback = "warn"   # "warn" (default) or "error"
 ```
 
-### [vdb]
+### [promotion]
 
 ```toml
-[vdb]
-# Central VDB backend driver. Only applies when topology.mode = "central".
-# The local index always uses LanceDB embedded -- no config required, no service needed.
-#
-# "pgvector"  -- PostgreSQL with pgvector extension. Default for central. Cloud-agnostic.
-# "qdrant"    -- Qdrant server (local or remote).
-# "opensearch" -- Amazon OpenSearch or compatible server.
-# "weaviate"  -- Weaviate server.
-central_driver = "pgvector"
-
-# Name of the PostgreSQL database cartographer uses for pgvector.
-# Only applies when central_driver = "pgvector".
-database = "cartographer"
-
-# Collection name prefix. Collections are named <prefix>_<project_id>_<scope>.
-collection_prefix = "carto"
+[promotion]
+# Promotion trigger. Only meaningful when topology.mode = "central".
+# "ci"               -- a CI step runs cartographer promote on merge to main. Recommended.
+# "post-merge-hook"  -- a git post-merge hook runs cartographer promote on the developer's machine.
+# "manual"           -- promotion only runs when cartographer promote is invoked explicitly.
+trigger = "manual"
 ```
 
-### [kg]
+### [isolation]
 
 ```toml
-[kg]
-# Central KG backend driver. Only applies when topology.mode = "central".
-# The local index always uses Kuzu embedded -- no config required, no service needed.
-#
-# "neo4j"    -- Neo4j server (local or remote). Default for central. Cloud-agnostic.
-# "arangodb" -- ArangoDB server.
-central_driver = "neo4j"
-
-# Namespace prefix. Namespaces are named <prefix>_<project_id>_<scope>.
-namespace_prefix = "carto"
+[isolation]
+# Tenant or client identifier. Cross-project recall never crosses a tenant boundary.
+# Use a consistent slug across all projects for the same client.
+tenant = "default"
 ```
 
-### [embedder]
+### [retrieval]
 
 ```toml
-[embedder]
-# Embedder driver.
-# "fastembed" -- local embedding model, no egress. Default. Recommended for client code.
-# "api"       -- remote embedding API. Requires api_url and api_key in local override.
-#               Only use if the team explicitly accepts that source code leaves the machine.
-driver = "fastembed"
-
-# Embedding model name. Applies to both fastembed and api drivers.
-# fastembed default: "BAAI/bge-small-en-v1.5"
-# For api driver: set to the model id accepted by your embedding endpoint.
-model = "BAAI/bge-small-en-v1.5"
-
-# Embedding vector dimensionality. Must match the model output.
-# Set automatically on first run if left unset; write it here to lock the value.
-# dimensions = 384
-```
-
-### [ingestion]
-
-```toml
-[ingestion]
-# Maximum chunk size in tokens. Applies to all artifact types.
-chunk_size_tokens = 512
-
-# Overlap between adjacent chunks, in tokens.
-chunk_overlap_tokens = 64
-
-# Seconds to wait after the last dirty-queue write before flushing.
-# Prevents a burst of edits from triggering multiple embed runs.
-debounce_seconds = 2.0
-
-# Glob patterns that the ingest hook watches for documentation changes.
-# Code and spec files are watched unconditionally.
-# Paths are relative to the project root.
-doc_watch_patterns = [
-  "docs/**/*",
-  "*.md",
-  "*.rst",
-  "*.pdf",
-  "*.docx",
-  "*.pptx",
-]
-
-# Glob patterns to exclude from ingestion entirely.
-exclude_patterns = [
-  ".cartographer/**",
-  ".git/**",
-  "node_modules/**",
-  "__pycache__/**",
-  "*.pyc",
-]
-```
-
-### [recall]
-
-```toml
-[recall]
+[retrieval]
 # Maximum tokens the SessionStart (preload) hook may inject into context.
-preload_budget_tokens = 1500
+preload_tokens = 2000
 
 # Maximum tokens the UserPromptSubmit (per-turn) hook may inject into context.
-per_turn_budget_tokens = 800
+per_turn_tokens = 1000
 
 # Number of VDB chunks to retrieve per query.
-top_k_vdb = 8
+top_k = 8
 
-# Depth of KG neighborhood traversal in recall queries.
-kg_neighborhood_depth = 2
+# Seconds of updated_at difference between local and global versions of the same
+# artifact before a conflict notice is shown. 0 = any difference counts as a conflict.
+conflict_threshold_seconds = 0
+
+# Set false to suppress conflict notices. The local version is still returned
+# either way -- conflict detection never blocks a read, it is informational.
+conflict_notice = true
 ```
 
-### [registry]
+> **Correction:** this section was previously (and incorrectly) documented as `[recall]`, with different field names (`preload_budget_tokens`, `per_turn_budget_tokens`, `top_k_vdb`, `kg_neighborhood_depth`). `config.py` only ever reads `[retrieval]` with the field names shown above; `[recall]` is not read at all. This was fixed in `cartographer.example.toml` during Phase 3.4 but this document still had the stale version until now.
+
+### [backends]
 
 ```toml
-[registry]
-# Path to the per-machine project registry database.
-# Relative paths are resolved from the user home directory.
-# This file is shared across all projects on the machine.
-path = "~/.cartographer/registry.db"
+[backends]
+
+[backends.vdb]
+# Local VDB driver. "lancedb" is the only local option today -- embedded,
+# on-disk, no service required.
+driver = "lancedb"
+
+[backends.kg]
+# Local KG driver. "kuzu" is the only local option today -- embedded,
+# on-disk, no service required.
+driver = "kuzu"
+
+[backends.embedder]
+# Embedder driver. "local" uses fastembed (no network egress). "api" is
+# accepted by the schema but has no implementation yet.
+driver = "local"
 ```
+
+> **Correction:** this document previously described top-level `[vdb]`, `[kg]`, and `[embedder]` sections with fields like `local_path`, `collection_prefix`, `namespace_prefix`, `model`, and `dimensions`. None of those fields exist on `config.py`'s `BackendDriver` model (it has exactly one field: `driver`). `config.py` never reads a top-level `[vdb]`/`[kg]`/`[embedder]` section at all -- only nested under `[backends]` as shown above. Local storage paths, collection naming, embedding model, and dimensionality are not currently configurable via `cartographer.toml`; they are fixed in code (see `cartographer/indexing/vdb.py`, `cartographer/indexing/kg.py`, `cartographer/ingestion/embedder.py`).
+
+### [central]
+
+```toml
+[central]
+# Which central backend technology to use. Only meaningful when
+# topology.mode = "central". Connection details (host, credentials) go in
+# cartographer.local.toml, never here.
+vdb_driver = "pgvector"
+kg_driver = "neo4j"
+```
+
+### [taxonomy]
+
+```toml
+[taxonomy]
+# Pinned edge-type taxonomy version. `cartographer doctor` reports drift if
+# this doesn't match the version bundled with the installed CLI.
+version = "1.0"
+```
+
+### [federation]
+
+```toml
+[federation]
+# project_ids whose global (central) scope this project's KG queries should
+# also fan out to, read-only, in addition to its own. Empty by default.
+global_overlays = []
+```
+
+> **Correction:** this document previously described an `[ingestion]` section (`chunk_size_tokens`, `chunk_overlap_tokens`, `debounce_seconds`, `doc_watch_patterns`, `exclude_patterns`) and a `[registry]` section (`path`). Neither exists in `config.py` -- there is no `IngestionSection` or `RegistrySection` model, and `load_config()` never reads either key. Chunk size and overlap are hardcoded constants in `cartographer/ingestion/chunker.py` (`MAX_CHARS = 2000`, `OVERLAP_CHARS = 256`), not configurable. The per-machine project registry's path is hardcoded in `cartographer/registry.py`'s `registry_path()` to `~/.cartographer/registry.json` (note: JSON, not SQLite as this document previously claimed) and is not read from any TOML file. See `docs/OPEN_QUESTIONS.md` for the open question on whether the registry location should become configurable.
 
 ---
 
-## 3. `.cartographer.local.toml` reference
+## 3. `cartographer.local.toml` reference
 
-This file is gitignored. It holds per-developer secrets and path overrides. Generate a stub with `cartographer init`; the stub contains only comments.
-
-### [vdb] (central override)
-
-These values are provided by the admin who provisioned the central backend. Required when `topology.mode = "central"`.
+This file is gitignored. It holds per-developer secrets and path overrides, matching `config.py`'s `LocalOverrideConfig` model exactly.
 
 ```toml
-[vdb]
+[paths]
+# Where the local VDB/KG index lives, relative to the project root.
+local_index_dir = ".cartographer/local"
+
+[central_vdb]
 # PostgreSQL connection details for the central pgvector backend.
-# Prefer CARTO_VDB_* environment variables in CI.
-host = "db.example.com"       # or "localhost" for local dev
+# Prefer CARTO_CENTRAL_VDB_* environment variables in CI.
+host = "localhost"
 port = 5432
 user = "cartographer"
-password = "secret"           # or use CARTO_VDB_PASSWORD
-```
+password = ""                 # or CARTO_CENTRAL_VDB_PASSWORD
+database = "cartographer"
 
-### [kg] (central override)
-
-```toml
-[kg]
+[central_kg]
 # Neo4j connection details for the central KG backend.
-# Prefer CARTO_KG_* environment variables in CI.
-uri = "bolt://neo4j.example.com:7687"   # or "bolt://localhost:7687" for local dev
+# Prefer CARTO_CENTRAL_KG_* environment variables in CI.
+uri = "bolt://localhost:7687"
 user = "neo4j"
-password = "secret"                      # or use CARTO_KG_PASSWORD
+password = ""                 # or CARTO_CENTRAL_KG_PASSWORD
+
+# Used to authenticate `cartographer promote` against the central backends.
+promotion_token = ""          # or CARTO_PROMOTION_TOKEN
+
+# Phase 4 kg_search: direct Claude API call for NL-to-Cypher translation.
+# Falls back to the standard ANTHROPIC_API_KEY env var if unset here.
+anthropic_api_key = ""        # or CARTO_ANTHROPIC_API_KEY
+
+# SR.2: per-project bearer token for the Standards Registry's authenticated
+# content API (stacks.registry_url). Issued by an Admin in the Standards web
+# app (SR.4's /admin/registry-tokens; hand-seeded for now since that screen
+# doesn't exist yet). Only meaningful if stacks.registry_url is also set.
+registry_token = ""           # or CARTO_REGISTRY_TOKEN
 ```
 
-### [embedder] (api override)
-
-```toml
-[embedder]
-# Only required when embedder.driver = "api".
-api_url = "https://embeddings.example.com/embed"
-api_key = "embedder-key-goes-here"
-```
-
-### [standards_registry] (override)
-
-```toml
-[standards_registry]
-# API key for the Standards Registry, if the registry requires authentication.
-api_key = "registry-key-goes-here"
-```
+> **Correction:** this document previously listed an `[embedder]` override (`api_url`, `api_key`) and a `[standards_registry]` override (`api_key`). Neither exists on `LocalOverrideConfig` -- the `api` embedder driver is accepted by the schema (Section 2) but has no connection-config fields or implementation yet. `registry_token` (above) replaces what that `[standards_registry]` override was reaching for, now actually implemented as of SR.2.
 
 ---
 
 ## 4. Environment variable reference
 
-Every config value can be overridden by a `CARTO_` environment variable. Variable names are derived from the TOML path: dots and brackets become underscores, all uppercase.
+Environment variables only override `cartographer.local.toml` fields, applied by `config.py`'s `_apply_env_overrides()` inside `load_local_override()`. There is no generic mechanism deriving a `CARTO_*` name from an arbitrary TOML path, and `cartographer.toml` (the committed file) has no environment override at all. This is the complete list -- nothing else is read:
 
-| Environment variable | Equivalent TOML key | Notes |
+| Environment variable | Overrides | Notes |
 |---|---|---|
-| `CARTO_PROJECT_ID` | `project.id` | |
-| `CARTO_PROJECT_TENANT` | `project.tenant` | |
-| `CARTO_TOPOLOGY_MODE` | `topology.mode` | |
-| `CARTO_TOPOLOGY_PROMOTION_TRIGGER` | `topology.promotion_trigger` | |
-| `CARTO_VDB_CENTRAL_DRIVER` | `vdb.central_driver` | Central VDB driver (pgvector, qdrant) |
-| `CARTO_VDB_HOST` | `vdb.host` (local override) | pgvector host |
-| `CARTO_VDB_PORT` | `vdb.port` (local override) | pgvector port |
-| `CARTO_VDB_USER` | `vdb.user` (local override) | pgvector user |
-| `CARTO_VDB_PASSWORD` | `vdb.password` (local override) | Set in CI |
-| `CARTO_KG_CENTRAL_DRIVER` | `kg.central_driver` | Central KG driver (neo4j, arangodb) |
-| `CARTO_KG_URI` | `kg.uri` (local override) | Neo4j Bolt URI |
-| `CARTO_KG_USER` | `kg.user` (local override) | Neo4j user |
-| `CARTO_KG_PASSWORD` | `kg.password` (local override) | Set in CI |
-| `CARTO_EMBEDDER_DRIVER` | `embedder.driver` | |
-| `CARTO_EMBEDDER_API_URL` | `embedder.api_url` (local override) | |
-| `CARTO_EMBEDDER_API_KEY` | `embedder.api_key` (local override) | |
-| `CARTO_STANDARDS_REGISTRY_URL` | `stacks.registry_url` | |
-| `CARTO_STANDARDS_REGISTRY_API_KEY` | `standards_registry.api_key` (local override) | |
-| `CARTO_RECALL_PRELOAD_BUDGET` | `recall.preload_budget_tokens` | |
-| `CARTO_RECALL_PER_TURN_BUDGET` | `recall.per_turn_budget_tokens` | |
-| `CARTO_REGISTRY_PATH` | `registry.path` | |
+| `CARTO_CENTRAL_VDB_HOST` | `central_vdb.host` | |
+| `CARTO_CENTRAL_VDB_PORT` | `central_vdb.port` | Parsed as int |
+| `CARTO_CENTRAL_VDB_USER` | `central_vdb.user` | |
+| `CARTO_CENTRAL_VDB_PASSWORD` | `central_vdb.password` | Set in CI |
+| `CARTO_CENTRAL_VDB_DATABASE` | `central_vdb.database` | |
+| `CARTO_CENTRAL_KG_URI` | `central_kg.uri` | |
+| `CARTO_CENTRAL_KG_USER` | `central_kg.user` | |
+| `CARTO_CENTRAL_KG_PASSWORD` | `central_kg.password` | Set in CI |
+| `CARTO_PROMOTION_TOKEN` | `promotion_token` | |
+| `CARTO_ANTHROPIC_API_KEY` | `anthropic_api_key` | Falls back to the standard `ANTHROPIC_API_KEY` if unset |
+| `CARTO_REGISTRY_TOKEN` | `registry_token` | SR.2: Standards Registry bearer token |
+
+This is the pattern added in Phase 4 specifically so a CI runner with no `cartographer.local.toml` file on disk can still inject central-backend secrets and run `cartographer promote` / `cartographer kg_search`.
+
+> **Correction:** this document previously listed `CARTO_PROJECT_ID`, `CARTO_PROJECT_TENANT`, `CARTO_TOPOLOGY_MODE`, `CARTO_TOPOLOGY_PROMOTION_TRIGGER`, `CARTO_VDB_CENTRAL_DRIVER`, `CARTO_KG_CENTRAL_DRIVER`, `CARTO_EMBEDDER_DRIVER`, `CARTO_EMBEDDER_API_URL`, `CARTO_EMBEDDER_API_KEY`, `CARTO_STANDARDS_REGISTRY_URL`, `CARTO_STANDARDS_REGISTRY_API_KEY`, `CARTO_RECALL_PRELOAD_BUDGET`, `CARTO_RECALL_PER_TURN_BUDGET`, and `CARTO_REGISTRY_PATH`. None of these are read anywhere in `config.py`. They described a generic derivation rule that was never implemented, for fields in the committed file that has no override layer at all.
 
 ---
 
@@ -280,23 +252,29 @@ These rules are hard requirements, not recommendations.
 
 | Rule | Detail |
 |---|---|
-| No secrets in `cartographer.toml` | Endpoints are acceptable if they are not sensitive. API keys, passwords, and tokens are never acceptable in the committed file. |
-| API keys go in the local override or the environment | `.cartographer.local.toml` is gitignored. `CARTO_*` environment variables are the preferred path in CI. |
-| `.cartographer.local.toml` is never committed | Add it to `.gitignore` at `cartographer init`. The CLI refuses to run `promote` or connect to central backends if `cartographer.toml` contains a string that matches common secret patterns (key, token, password, secret). |
-| Embedder defaults to local | `embedder.driver = "fastembed"` is the default. Changing it to `"api"` is a deliberate team decision that must be acknowledged; the CLI warns on first use that source code will leave the machine. |
+| No secrets in `cartographer.toml` | API keys, passwords, and tokens are never acceptable in the committed file. |
+| Secrets go in the local override or the environment | `cartographer.local.toml` is gitignored. `CARTO_*` environment variables (Section 4) are the preferred path in CI. |
+| `cartographer.local.toml` is never committed | Add it to `.gitignore` at `cartographer init`. |
+| Embedder defaults to local | `backends.embedder.driver = "local"` (fastembed) is the default. The `api` driver exists in the schema but is not implemented. |
+
+> **Correction:** this document previously described a `cartographer doctor`/`promote` guard that refuses to run if `cartographer.toml` contains a string matching common secret patterns (`key`, `token`, `password`, `secret`). That check is real -- see `docs/SECURITY_AND_ISOLATION.md` -- but it is not part of `cartographer doctor` (see Section 6's correction); it gates central-backend operations specifically.
 
 ---
 
 ## 6. Config validation
 
-`cartographer doctor` validates the full merged config and reports every violation. Validations include:
+`cartographer doctor` validates config and local index health and reports every violation. Reading `cli/src/cartographer/commands/doctor.py` directly, the actual checks are:
 
-- Required fields present for the configured topology and drivers.
-- No secret-pattern strings in the committed `cartographer.toml`.
-- Local backend paths exist and are writable (for lancedb and kuzu drivers).
-- Central backend endpoints are reachable and the API key is accepted (for central topology).
-- Embedding dimensions in config match the dimensions stored in the existing VDB collection, if one already exists.
-- `project.id` in config matches the `project_id` in the registry entry for this project root.
+- `cartographer.toml` exists and parses into a valid `CartographerConfig`.
+- The local VDB (`vdb.lance`) and local KG (`kg.kuzu`) open successfully.
+- When `topology.mode = "central"`: `promotion_token` is present (info-level, not a failure if absent); the central VDB (pgvector) is reachable; the central KG (Neo4j) is reachable. Reachability failures are hard failures (exit `1`); missing optional driver packages or unconfigured credentials are info-level only.
+- Whether `cartographer serve` is currently running, and whether its watcher is active (info-level).
+- Whether Cartographer's MCP server entries are present in `.mcp.json` (info-level).
+- Whether `taxonomy.version` matches the CLI's canonical taxonomy version (info-level drift warning).
+- Whether the local KG contains edge types outside the canonical taxonomy (info-level, best-effort).
+- For each pack in `stacks.active`: whether a real AST parser is installed for that stack, or whether it's falling back to the regex parser (info-level).
+
+> **Correction:** this document previously claimed `doctor` checks "no secret-pattern strings in the committed `cartographer.toml`", "embedding dimensions in config match the dimensions stored in the existing VDB collection", and "`project.id` in config matches the `project_id` in the registry entry for this project root." None of these three checks exist in `doctor.py`. The secret-pattern scan is real but lives elsewhere (see Section 5's correction); the other two do not exist anywhere in the codebase -- there is no `dimensions` field in the current config schema (Section 2's correction) and no code cross-checking `project.id` against the registry.
 
 ---
 

@@ -31,6 +31,10 @@ Record the exact error message, file, and line number before touching anything.
 
 ### Step 2: Trace the import chain via the knowledge graph
 
+**If `kg_query`/`vdb_search` are not in your available tools** (this project has indexing
+disabled), skip to Step 5's `grep`-based approach instead — it finds the same type definitions and
+usages without the KG.
+
 Use the KG to find the root of the error — don't fix symptoms:
 ```
 MATCH (a:Artifact)-[r:RelatesTo {type: 'imports'}]->(b:Artifact)

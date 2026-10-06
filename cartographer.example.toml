@@ -1,17 +1,23 @@
 # cartographer.example.toml
 #
 # Copy this file to cartographer.toml in your project root.
-# cartographer init generates a version of this file automatically.
+# cartographer init generates a version of this file automatically, from
+# config.py's CartographerConfig.to_toml() -- the sections and fields below
+# are exactly what that model reads. There is no other config surface for
+# cartographer.toml; a section or field not listed here has no effect.
 #
 # This file is safe to commit. It must never contain secrets (API keys,
 # passwords, tokens). Per-developer secrets and endpoint overrides go in
-# .cartographer.local.toml, which is gitignored.
+# cartographer.local.toml, which is gitignored.
 #
 # Precedence (highest to lowest):
-#   CARTO_* environment variables
-#   .cartographer.local.toml  (gitignored, per-developer)
-#   cartographer.toml         (this file, committed)
+#   CARTO_* environment variables   (only override cartographer.local.toml fields)
+#   cartographer.local.toml         (gitignored, per-developer)
+#   cartographer.toml               (this file, committed)
 #   built-in defaults
+#
+# See docs/CONFIGURATION.md for the full reference, including the env var list
+# and what cartographer.local.toml and cartographer doctor actually check.
 
 
 # ---------------------------------------------------------------------------
@@ -26,11 +32,6 @@ id = "00000000-0000-0000-0000-000000000000"
 # Human-readable project name. Defaults to the root directory name at init time.
 name = "my-project"
 
-# Tenant or client identifier used to enforce cross-project recall isolation.
-# Cross-project recall never crosses a tenant boundary.
-# Use a consistent slug across all projects for the same client or engagement.
-tenant = "internal"
-
 
 # ---------------------------------------------------------------------------
 # Topology
@@ -43,13 +44,10 @@ tenant = "internal"
 #               Suitable for solo developers and teams not ready for shared infra.
 #   "central" -- local index per developer plus a configured central backend.
 #               Promotion moves merged artifacts to the shared global index.
+#   "none"    -- no KG/VDB indexing at all. Standards/skills/agents packs still
+#               install normally; skills and agents that rely on KG/VDB lookups
+#               (vdb_search/kg_query/kg_neighbors) won't have those tools available.
 mode = "local"
-
-# How promotion is triggered. Only applies when mode = "central".
-#   "ci"              -- recommended. A CI step runs cartographer promote on merge to main.
-#   "post-merge-hook" -- a git post-merge hook runs on the developer's machine.
-#   "manual"          -- promotion only runs when cartographer promote is called explicitly.
-promotion_trigger = "ci"
 
 
 # ---------------------------------------------------------------------------
@@ -59,137 +57,50 @@ promotion_trigger = "ci"
 [stacks]
 
 # Stack packs applied to this project. Add packs with: cartographer stack add <name>
-# Supported values: "python", "react". Contributors add more.
+# Supported values: "cross-stack", "python", "react", "typescript", "golang", "rust",
+# "java", "kotlin", "angular", "vue", "swift", "dart". Contributors add more.
 active = ["python"]
 
-# URL of the Standards Registry to fetch published pack versions from.
-# When unset, the CLI uses pack versions bundled with the installed CLI.
-# When set but unreachable, the CLI falls back to bundled versions and logs a warning.
+# Standards Registry (SR.2): base URL of the Standards web app's API. When
+# set, stack add / init --stack fetch pack content from
+# <registry_url>/api/packs/<name>/content (bearer-token authenticated --
+# see cartographer.local.toml's registry_token). When unset, bundled
+# versions are always used (current behavior for any project that hasn't
+# adopted a registry). The web app itself is not yet built as of this
+# writing -- these fields are implemented and usable against a real
+# deployment once one exists.
 # registry_url = "https://standards.example.com"
+# registry_fallback = "warn"       # "warn" (default) or "error" on registry fetch failure
 
 
 # ---------------------------------------------------------------------------
-# Vector database (VDB) driver
+# Promotion
 # ---------------------------------------------------------------------------
 
-[vdb]
+[promotion]
 
-# VDB backend driver.
-#   "lancedb"     -- local embedded, on-disk. Default. No service required.
-#   "qdrant"      -- Qdrant server (local or remote).
-#   "pgvector"    -- PostgreSQL with pgvector extension.
-#   "opensearch"  -- Amazon OpenSearch or OpenSearch-compatible.
-#   "weaviate"    -- Weaviate server.
-driver = "lancedb"
-
-# Local data directory for the lancedb driver, relative to the project root.
-local_path = ".cartographer/vdb"
-
-# Collection name prefix. Collections are named <prefix>_<project_id>_<scope>.
-collection_prefix = "carto"
-
-# Central backend endpoint and API key go in .cartographer.local.toml, not here.
-# See the local override section of docs/CONFIGURATION.md.
+# How promotion is triggered. Only applies when topology.mode = "central".
+#   "ci"              -- recommended. A CI step runs cartographer promote on merge to main.
+#   "post-merge-hook" -- a git post-merge hook runs on the developer's machine.
+#   "manual"          -- promotion only runs when cartographer promote is called explicitly.
+trigger = "manual"
 
 
 # ---------------------------------------------------------------------------
-# Knowledge graph (KG) driver
+# Tenant isolation
 # ---------------------------------------------------------------------------
 
-[kg]
+[isolation]
 
-# KG backend driver.
-#   "kuzu"      -- local embedded, on-disk. Default. No service required.
-#   "neo4j"     -- Neo4j server (local or remote).
-#   "neptune"   -- Amazon Neptune or Neptune-compatible.
-#   "arangodb"  -- ArangoDB server.
-driver = "kuzu"
-
-# Local data directory for the kuzu driver, relative to the project root.
-local_path = ".cartographer/kg"
-
-# Namespace prefix. Namespaces are named <prefix>_<project_id>_<scope>.
-namespace_prefix = "carto"
-
-# Central backend endpoint and API key go in .cartographer.local.toml, not here.
-
-
-# ---------------------------------------------------------------------------
-# Embedder driver
-# ---------------------------------------------------------------------------
-
-[embedder]
-
-# Embedder driver.
-#   "fastembed" -- local model, no data egress. Default. Recommended for client code.
-#   "api"       -- remote embedding API. Source code leaves the machine.
-#                  Only use if the team explicitly accepts egress.
-#                  Requires api_url and api_key in .cartographer.local.toml.
-driver = "fastembed"
-
-# Embedding model name.
-#   fastembed default: "BAAI/bge-small-en-v1.5"  (384 dimensions, fast, good quality)
-#   For the api driver: set to the model id accepted by your embedding endpoint.
-model = "BAAI/bge-small-en-v1.5"
-
-# Vector dimensionality. Must match the model output.
-# Leave commented to let cartographer set this automatically on first run,
-# then uncomment and commit the value to lock it for the project.
-# dimensions = 384
-
-
-# ---------------------------------------------------------------------------
-# Ingestion pipeline
-# ---------------------------------------------------------------------------
-
-[ingestion]
-
-# Maximum chunk size in tokens. Applies to code, spec, and doc artifacts.
-chunk_size_tokens = 512
-
-# Overlap between adjacent chunks in tokens.
-# Higher overlap improves recall continuity; increases storage and embed cost.
-chunk_overlap_tokens = 64
-
-# Seconds to wait after the last dirty-queue write before flushing.
-# Prevents a burst of rapid edits from triggering multiple embed runs.
-debounce_seconds = 2.0
-
-# Glob patterns the ingest hook watches for documentation file changes.
-# Code and spec files are watched unconditionally and do not need to be listed here.
-# Paths are relative to the project root.
-doc_watch_patterns = [
-  "docs/**/*",
-  "*.md",
-  "*.rst",
-  "*.pdf",
-  "*.docx",
-  "*.pptx",
-]
-
-# Glob patterns excluded from ingestion entirely.
-exclude_patterns = [
-  ".cartographer/**",
-  ".git/**",
-  "node_modules/**",
-  "__pycache__/**",
-  "dist/**",
-  "build/**",
-  "*.pyc",
-  "*.egg-info/**",
-]
+# Tenant or client identifier used to enforce cross-project recall isolation.
+# Cross-project recall never crosses a tenant boundary.
+# Use a consistent slug across all projects for the same client or engagement.
+tenant = "default"
 
 
 # ---------------------------------------------------------------------------
 # Retrieval
 # ---------------------------------------------------------------------------
-#
-# Note: this section was previously (and incorrectly) documented here as
-# [recall], with different field names (preload_budget_tokens,
-# per_turn_budget_tokens, top_k_vdb, kg_neighborhood_depth). cartographer's
-# config loader only ever read [retrieval] — that section was never actually
-# parsed. Corrected as part of Phase 3.4; docs/CONFIGURATION.md and a few
-# other docs still have the stale [recall] version as of this writing.
 
 [retrieval]
 
@@ -208,33 +119,47 @@ top_k = 8
 conflict_threshold_seconds = 0
 
 # Set false to suppress conflict notices. The local version is still returned
-# either way — conflict detection never blocks a read, it is informational.
+# either way -- conflict detection never blocks a read, it is informational.
 conflict_notice = true
 
 
 # ---------------------------------------------------------------------------
-# Registry
+# Backend drivers (local)
 # ---------------------------------------------------------------------------
+#
+# These select the local embedded driver. There is currently only one local
+# option for each -- local storage paths, collection naming, embedding model,
+# and dimensionality are fixed in code, not configurable here (see
+# docs/CONFIGURATION.md Section 2 for exactly what's hardcoded and where).
 
-[registry]
+[backends.vdb]
+driver = "lancedb"
 
-# Path to the per-machine project registry database.
-# Relative paths are resolved from the user home directory (~).
-# This file is shared across all projects on the machine; do not put it inside
-# a project directory.
-path = "~/.cartographer/registry.db"
+[backends.kg]
+driver = "kuzu"
+
+[backends.embedder]
+# "local" -- fastembed, no data egress. Default.
+# "api"   -- accepted by the schema but not implemented yet.
+driver = "local"
+
+
+# ---------------------------------------------------------------------------
+# Central backend driver selection
+# ---------------------------------------------------------------------------
+#
+# Which central backend technology to use. Only meaningful when
+# topology.mode = "central". Connection details and credentials go in
+# cartographer.local.toml, never here.
+
+[central]
+vdb_driver = "pgvector"
+kg_driver = "neo4j"
 
 
 # ---------------------------------------------------------------------------
 # Edge taxonomy (Phase 4)
 # ---------------------------------------------------------------------------
-#
-# Named [taxonomy], not [kg] — a top-level [kg] section already exists above
-# this one in older copies of this file (driver selection) and was never
-# actually read by config.py's loader. Reusing that name here would create a
-# second, differently-shaped collision with the same dead section instead of
-# fixing it. See docs/phases/phase-4-enterprise.md's alignment note and
-# docs/standards/edge-taxonomy.md for the full canonical list.
 
 [taxonomy]
 

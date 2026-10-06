@@ -261,6 +261,7 @@ A published version is immutable. Corrections require a new draft with a new ver
 | Version history | `/packs/:packName/versions` | All |
 | Admin: user management | `/admin/users` | Admin |
 | Admin: pack management | `/admin/packs` | Admin |
+| Admin: registry tokens | `/admin/tokens` | Admin |
 
 ### 2.5 Screen flows
 

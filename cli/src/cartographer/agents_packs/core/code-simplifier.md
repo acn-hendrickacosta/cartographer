@@ -49,6 +49,11 @@ RETURN a.path, r.type LIMIT 20
 
 If the KG returns zero results for a symbol, it has no known dependents — removal is low-risk. If results appear, read those files before proceeding. Never remove code the KG shows is still referenced.
 
+**If `kg_query` is not in your available tools** (this project has indexing disabled): `Grep` for
+the symbol/module name across the codebase instead. Zero grep hits outside its own definition means
+the same thing zero KG results would — no known dependents, removal is low-risk. Non-zero hits:
+read those files before proceeding, same rule as above.
+
 Read only the files these queries return. Then understand:
 - What does this code do?
 - What invariants does it maintain?

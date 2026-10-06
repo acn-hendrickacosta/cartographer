@@ -37,6 +37,10 @@ WHERE b.path CONTAINS '[module that will change]'
 RETURN a.path LIMIT 20
 ```
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): `Grep` for the feature name in any `docs/`/`specs/`/`adr/` directory to find specs and
+prior decisions, and `Grep` for the module name's imports to map what the plan will touch.
+
 Read only the files these queries return. Then clarify with the requester:
 - What is the user-facing outcome? (what changes for the user)
 - What are the acceptance criteria? (how do we know we're done)

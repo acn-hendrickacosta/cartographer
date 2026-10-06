@@ -135,16 +135,35 @@ See each sub-phase document for detailed criteria. Phase 3 is complete when all 
 
 ---
 
+## Phase 5: Optional indexing (KG/VDB opt-out)
+
+**Goal:** Let a user take advantage of standards/skills/agents packs without the KG/VDB indexing machinery at all, via a new `topology = "none"` config value. See [phase-5-optional-indexing.md](phases/phase-5-optional-indexing.md) for the full design and verification record.
+
+**Entry condition:** none — independent addition to the existing `topology` field, not a Phase 4 continuation.
+
+**Status: complete (2026-10-06).** `cartographer init --topology none` skips local VDB/KG provisioning, `.mcp.json` registration, the four Claude Code hooks, and `archaeology`/`recall` skill install, while standards/skills/agents packs still install exactly as before (confirmed standards and all 15 bundled skill packs have zero KG/VDB dependency already). `cartographer doctor` no longer FAILs on a project that deliberately opted out. **Agent fallback content also complete:** all 43 bundled agent files (corrected count; 18 core + 25 stack-specific) now carry an explicit Grep/Glob-based fallback at their KG/VDB step, added one file at a time -- see the phase doc's "Agent fallback content" section.
+
+---
+
 ## Standards distribution track
 
-This track runs independently of the phases above. It is a packaging and authoring concern, not a KG/VDB concern.
+This track runs independently of the phases above. It is a packaging and authoring concern, not a KG/VDB concern. See [phases/standards-registry.md](phases/standards-registry.md) for the full track overview.
 
 | Phase | Scope | Status | Exit criteria |
 |---|---|---|---|
-| Standards, local | Cross-stack, Python, and React packs bundled in the CLI; `init` and `stack add` copy from bundled install | Done | Implemented and verified end to end. Changing a standard requires a CLI release. |
-| Standards Registry and web app | Versioned cloud-hosted index (S3); separate web app for SME authoring, review, and publish; CLI fetches from registry with bundled fallback | Not started | An SME publishes a new pack version through the web app with no CLI release, and a project's next `cartographer stack add` picks it up. |
+| Standards, local | All 12 bundled packs (`cross-stack`, `python`, `react`, `typescript`, `golang`, `rust`, `java`, `kotlin`, `angular`, `vue`, `swift`, `dart`) bundled in the CLI; `init` and `stack add` copy from bundled install | Done | Implemented and verified end to end. Changing a standard requires a CLI release. |
 
-The Standards Registry and web app phase does not have a start date. It begins when OQ-08 (registry storage), OQ-09 (auth and review model), and OQ-10 (CLI fallback behavior) are resolved. See [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md).
+**Standards Registry and web app -- entry condition satisfied 2026-10-05.** OQ-08 (registry storage), OQ-09 (auth and review model), and OQ-10 (CLI fallback behavior) are resolved -- see [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) closed questions. Broken into four sequential sub-phases, same pattern as Phase 3:
+
+| Pass | Document | Scope | Entry condition |
+|---|---|---|---|
+| SR.1 | [phases/sr-1-registry-infrastructure.md](phases/sr-1-registry-infrastructure.md) | Private S3 registry infrastructure, pack version schema, bundled-pack migration via admin script (no CLI/web app changes) | OQ-08/09/10 resolved (done). **Complete 2026-10-05** -- bucket provisioned, all 12 packs migrated, all 3 exit criteria verified against the live bucket. |
+| SR.2 | [phases/sr-2-webapp-auth-and-read-views.md](phases/sr-2-webapp-auth-and-read-views.md) | Web app: Cognito auth, Standards/Skills/Agents sidebar views, pack detail, version history (read-only); authenticated registry-read API; CLI registry fetch | SR.1 complete. **Substantially complete 2026-10-05** -- real Cognito/Postgres provisioned, React SPA + FastAPI backend built and tested, full CLI-fetch loop proven against the live server. Remaining: deploy to the actual shared EKS cluster (no access to it from this environment). |
+| SR.3 | [phases/sr-3-webapp-authoring-and-publish.md](phases/sr-3-webapp-authoring-and-publish.md) | Web app: pack editor, review queue/screen, publish flow -- closes the full authoring loop | SR.2 complete. **Complete 2026-10-06** -- all 6 exit criteria verified live (real Cognito/Postgres/S3), including a real `cartographer stack add` picking up a web-app-published version. |
+| SR.4 | [phases/sr-4-webapp-admin.md](phases/sr-4-webapp-admin.md) | Web app: user management, pack management, registry token issuance/revocation | SR.3 complete. **Complete 2026-10-06** -- all 6 exit criteria verified live (real Cognito/Postgres/S3): role change, pack creation/deprecation (with a live 409 against new drafts for a deprecated pack), and token issuance/fetch/revocation. |
+| SR.5 | [phases/sr-5-project-forks.md](phases/sr-5-project-forks.md) | Per-project forks: a project copies a pack into its own registry namespace and pushes local edits to it via the CLI (`stack fork`/`stack push`), opt-in per project+pack, no SME review gate | SR.4 complete. **Complete 2026-10-06** -- added after the original four-phase scope, by explicit request (knowingly reopens the track's earlier "no multi-tenant registry" line). Verified live: fork, push, and a real `stack add` picking up the pushed content with zero CLI config change, plus a regression check that an unforked project's fetch is unaffected. |
+
+**Track complete 2026-10-06 (all five sub-phases pass).** The single most important exit criterion (same goal as the track itself): an SME publishes a new pack version through the web app with no CLI release, and a project's next `cartographer stack add` picks it up -- **demonstrated live, end to end, in SR.3, 2026-10-06.** Remaining work is infra/ops, not functional: deploying to the org's actual shared EKS cluster (SR.2 only proved the app against Docker Desktop's local Kubernetes / a plain local process, since this environment has no access to the real cluster).
 
 ---
 

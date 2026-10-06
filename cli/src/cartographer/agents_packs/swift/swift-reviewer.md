@@ -36,6 +36,10 @@ RETURN b.path, b.attrs LIMIT 10
 
 Run these after identifying changed files from the diff. Review any files the KG shows are callers or importers — they are also in scope.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): `Grep` for the changed file's type/function names across the codebase to approximate
+callers and importers instead.
+
 When invoked:
 1. Run `swift build`, `swiftlint lint --quiet` (if available), and `swift test` - if any fail, stop and report
 2. Run `git diff HEAD~1 -- '*.swift'` (or `git diff main...HEAD -- '*.swift'` for PR review) to see recent Swift file changes

@@ -166,27 +166,31 @@ cartographer stack add <name>
 
 | Argument | Description |
 |---|---|
-| `name` | Pack name. Currently supported: `python`, `react`. |
+| `name` | Pack name. Currently supported: `cross-stack`, `python`, `react`, `typescript`, `golang`, `rust`, `java`, `kotlin`, `angular`, `vue`, `swift`, `dart`. |
 
-**Process:**
+**Process (implemented 2026-10-05, SR.2):**
 1. Load config.
 2. Resolve pack content:
-   - If `stacks.registry_url` is configured: attempt to fetch the latest published version from the Standards Registry. On failure (network error, 4xx, 5xx): fall back to bundled version and log a warning with the registry URL and error.
-   - If `stacks.registry_url` is not configured: use bundled version.
-3. Copy pack markdown into `.claude/standards/<name>/`.
-4. If the pack includes optional hook additions or skills: merge them additively into the workspace.
+   - If `stacks.registry_url` is configured and `cartographer.local.toml` has a `registry_token`: call `GET <registry_url>/api/packs/<name>/content` with the token as a bearer header (`cartographer/standards_registry.py`). On success, use the returned zip archive (all of the pack's `.md` files).
+   - On any failure (missing token, 401, 404, network error): fall back per `stacks.registry_fallback` -- `"warn"` (default) logs and uses the bundled version; `"error"` exits `1`.
+   - If `stacks.registry_url` is not configured: always use the bundled version shipped with the CLI (`cli/src/cartographer/standards_packs/<name>/`) -- unchanged default behavior for any project that hasn't adopted a registry.
+3. Copy pack markdown into `.claude/standards/<name>/` (extracted flat from the registry zip, or copied from the bundled directory).
+4. If the pack includes optional hook additions or skills: merge them additively into the workspace. These always come from the bundled install -- the registry only distributes standards content, not skills or agents.
 5. Update `stacks.active` in `cartographer.toml` to include `<name>` if not already present.
-6. Print what was written.
+6. Print what was written, including the fetched version when the registry path was used.
 
-**Exit codes:** `0` success, `1` pack name not recognized, `2` file write failed.
+**Exit codes:** `0` success, `1` pack name not recognized or registry fetch failed with `registry_fallback = "error"`, `2` file write failed.
 
 **Failure modes:**
 
 | Failure | Behavior |
 |---|---|
-| Registry fetch fails | Fall back to bundled pack, log warning, continue |
 | Pack name not recognized | Exit `1` with message listing supported packs |
 | Destination files already exist | Overwrite with confirmation prompt (or `--yes`) |
+| Registry configured, fetch fails, `registry_fallback = "warn"` (default) | Log warning with the failure reason, use bundled version, exit `0` |
+| Registry configured, fetch fails, `registry_fallback = "error"` | Exit `1` |
+
+**Note on what changed:** an earlier version of this section (and, before that, an even earlier version going the other direction) went back and forth on whether this was implemented. As of 2026-10-05 it is implemented, calling an authenticated API endpoint served by the Standards web app -- not, as an intermediate design had it, a public S3/CloudFront URL with no request-level auth. See [phases/sr-2-webapp-auth-and-read-views.md](../phases/sr-2-webapp-auth-and-read-views.md) and `ARCHITECTURE.md` §7.2's correction note. The web app itself is not yet built as of this writing, so there is nothing to point `registry_url` at in production yet -- but the CLI-side code, config fields, and tests are in place and ready for when it exists.
 
 ---
 

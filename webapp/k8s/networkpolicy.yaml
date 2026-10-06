@@ -1,0 +1,38 @@
+# Default-deny plus explicit allows, since this namespace shares a cluster
+# with other tenants and handles auth tokens + (from SR.3 on) draft content.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: standards-webapp-default-deny
+  namespace: standards-webapp
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: standards-webapp-allow
+  namespace: standards-webapp
+spec:
+  podSelector:
+    matchLabels:
+      app: standards-webapp
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from: []  # from the Ingress/ALB; tighten to the controller's pods if the cluster's CNI supports it
+      ports:
+        - port: 8000
+  egress:
+    - to: []  # AWS API endpoints (S3, Cognito) are reached over the internet/VPC endpoints, not in-cluster
+      ports:
+        - port: 443
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to: []  # Postgres (DATABASE_URL) -- same instance the CLI's central VDB backend
+              # uses in production. Tighten `to` to that instance's security group /
+              # CIDR once it's real; "to: []" is a placeholder, not a real-world-safe default.
+      ports:
+        - port: 5432

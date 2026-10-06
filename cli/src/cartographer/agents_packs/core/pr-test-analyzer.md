@@ -48,6 +48,10 @@ vdb_search("test coverage [language] unit integration [component type]")
 
 A behavior is adequately tested when the KG shows: (a) the changed functions are called by at least one test file, and (b) all branches reachable through its call graph have test coverage.
 
+**If `kg_query`/`vdb_search` are not in your available tools** (this project has indexing
+disabled): skip straight to Step 4's `find`/`grep` patterns below to locate associated tests and
+callers instead — they answer the same question without the KG.
+
 ### Step 3: Classify Each Changed File
 
 For each non-test file changed, determine:

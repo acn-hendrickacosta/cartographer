@@ -1,0 +1,23 @@
+{
+  "name": "standards-webapp-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Source for the Standards web app's UI. Build output is committed into ../backend/app/static/dist so the backend can be run without Node -- only maintainers editing this UI need it.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/space-grotesk": "^5.3.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.0"
+  }
+}

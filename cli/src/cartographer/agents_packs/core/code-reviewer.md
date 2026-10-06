@@ -31,6 +31,11 @@ When invoked:
    RETURN b.path, b.attrs LIMIT 10
    ```
    Review against any spec found — a deviation is a bug regardless of which side is "right."
+
+   **If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+   disabled): `Grep` for the changed file's path/symbol names across the codebase to approximate
+   callers/importers, and `Grep` for the feature name in any `docs/`/`specs/` directory to find a
+   spec to review against.
 3. **Understand scope** — Identify which files changed, what feature/fix they relate to, and how they connect.
 4. **Read only the specific files the index returned** — Don't review changes in isolation, but don't read the entire codebase either. Focus on changed files and the callers/importers the KG identified.
 5. **Apply review checklist** — Work through each category below, from CRITICAL to LOW.

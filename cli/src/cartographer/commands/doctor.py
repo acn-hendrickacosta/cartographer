@@ -34,18 +34,22 @@ def run(
         raise typer.Exit(code=1) from exc
 
     local_dir = workspace / ".cartographer" / "local"
+    indexing_enabled = cfg.topology.mode != "none"
 
-    if vdb.is_readable(local_dir / "vdb.lance"):
-        console.print("[green]OK[/green]   local VDB opens")
+    if not indexing_enabled:
+        console.print("[yellow]INFO[/yellow] indexing disabled (topology=none) -- skipping local KG/VDB checks")
     else:
-        console.print("[red]FAIL[/red] local VDB not readable")
-        healthy = False
+        if vdb.is_readable(local_dir / "vdb.lance"):
+            console.print("[green]OK[/green]   local VDB opens")
+        else:
+            console.print("[red]FAIL[/red] local VDB not readable")
+            healthy = False
 
-    if kg.is_readable(local_dir / "kg.kuzu"):
-        console.print("[green]OK[/green]   local KG opens")
-    else:
-        console.print("[red]FAIL[/red] local KG not readable")
-        healthy = False
+        if kg.is_readable(local_dir / "kg.kuzu"):
+            console.print("[green]OK[/green]   local KG opens")
+        else:
+            console.print("[red]FAIL[/red] local KG not readable")
+            healthy = False
 
     if cfg.topology.mode == "central":
         override = config_mod.load_local_override(workspace)
@@ -80,33 +84,34 @@ def run(
         except ImportError:
             console.print("[yellow]INFO[/yellow] central KG: neo4j not installed; run: pip install 'cartographer[central]'")
 
-    serve = serve_state.current_running_state()
-    if serve is not None:
-        kg_health = serve_state.check_health(serve.kg_port)
-        watching = bool((kg_health or {}).get("watch"))
-        console.print(
-            f"[green]OK[/green]   cartographer serve is running (pid {serve.pid}, "
-            f"{'watching' if watching else 'not watching'})"
-        )
-    else:
-        console.print(
-            "[yellow]INFO[/yellow] cartographer serve is not running — "
-            "local index will not auto-update on file changes"
-        )
+    if indexing_enabled:
+        serve = serve_state.current_running_state()
+        if serve is not None:
+            kg_health = serve_state.check_health(serve.kg_port)
+            watching = bool((kg_health or {}).get("watch"))
+            console.print(
+                f"[green]OK[/green]   cartographer serve is running (pid {serve.pid}, "
+                f"{'watching' if watching else 'not watching'})"
+            )
+        else:
+            console.print(
+                "[yellow]INFO[/yellow] cartographer serve is not running — "
+                "local index will not auto-update on file changes"
+            )
 
-    mcp_path = workspace / ".mcp.json"
-    mcp_wired = False
-    if mcp_path.exists():
-        try:
-            data = json.loads(mcp_path.read_text(encoding="utf-8"))
-            mcp_wired = any(k.startswith("cartographer") for k in data.get("mcpServers", {}))
-        except json.JSONDecodeError:
-            pass
+        mcp_path = workspace / ".mcp.json"
+        mcp_wired = False
+        if mcp_path.exists():
+            try:
+                data = json.loads(mcp_path.read_text(encoding="utf-8"))
+                mcp_wired = any(k.startswith("cartographer") for k in data.get("mcpServers", {}))
+            except json.JSONDecodeError:
+                pass
 
-    if mcp_wired:
-        console.print("[green]OK[/green]   Cartographer MCP entries present in .mcp.json")
-    else:
-        console.print("[yellow]INFO[/yellow] Cartographer MCP entries not found; run 'cartographer init'")
+        if mcp_wired:
+            console.print("[green]OK[/green]   Cartographer MCP entries present in .mcp.json")
+        else:
+            console.print("[yellow]INFO[/yellow] Cartographer MCP entries not found; run 'cartographer init'")
 
     if cfg.taxonomy.version == taxonomy_mod.CANONICAL_TAXONOMY_VERSION:
         console.print(f"[green]OK[/green]   edge taxonomy pinned version ({cfg.taxonomy.version}) matches installed CLI")
@@ -116,7 +121,7 @@ def run(
             f"installed CLI is {taxonomy_mod.CANONICAL_TAXONOMY_VERSION!r} — see 'cartographer taxonomy list'"
         )
 
-    if kg.is_readable(local_dir / "kg.kuzu"):
+    if indexing_enabled and kg.is_readable(local_dir / "kg.kuzu"):
         try:
             rows = kg.query(local_dir / "kg.kuzu", "MATCH ()-[r:RelatesTo]->() RETURN DISTINCT r.type AS type")
             drift = taxonomy_mod.lint_edge_types({r["type"] for r in rows if r.get("type")})

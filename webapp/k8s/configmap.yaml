@@ -1,0 +1,17 @@
+# Non-secret settings. Replace the placeholder values for your environment --
+# these are the real values from this session's SR.2 build, safe to reference
+# as an example but double-check before reusing verbatim in a shared cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: standards-webapp-config
+  namespace: standards-webapp
+data:
+  AWS_REGION: "us-east-1"
+  COGNITO_POOL_ID: "us-east-1_4TI3BpY8r"
+  COGNITO_CLIENT_ID: "14dd9c9dfdso03eb301hls96b0"
+  COGNITO_DOMAIN: "cartographer-standards-11439652"
+  REGISTRY_BUCKET: "cartographer-standards-registry-983883745126"
+  BASE_URL: "https://REPLACE-ME.example.com"  # must match the Ingress host below and Cognito's callback URL
+  # DATABASE_URL is NOT here -- it carries a password, so it belongs in the
+  # Secret (k8s/secret.example.yaml), not this ConfigMap.

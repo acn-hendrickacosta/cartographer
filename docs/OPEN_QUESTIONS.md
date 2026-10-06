@@ -71,7 +71,7 @@ These questions must be answered before the first line of implementation is writ
 
 **Question:** Where does the per-machine project registry live -- per-user home directory, or configurable?
 
-**Current default in config:** `~/.cartographer/registry.db`.
+**Current behavior (not config-driven):** hardcoded to `~/.cartographer/registry.json` in `registry.py`'s `registry_path()`. There is no `cartographer.toml` field or environment variable that controls this today -- "current default in config" was corrected 2026-10-05; there is no config surface for it at all yet, only a hardcoded path.
 
 **Why it matters:** A per-home-directory registry works for a single user but breaks in shared CI environments or Docker containers where the home directory is ephemeral.
 
@@ -79,11 +79,11 @@ These questions must be answered before the first line of implementation is writ
 
 | Option | Tradeoff |
 |---|---|
-| `~/.cartographer/registry.db` (per-user) | Works for local dev. Breaks in ephemeral environments. |
-| Configurable via `registry.path` | Flexible. Teams using CI must configure it explicitly. |
-| Inside the project directory (`.cartographer/registry.db`) | Portable with the project. Cannot support cross-project recall without a global fallback. |
+| `~/.cartographer/registry.json` (per-user, current hardcoded behavior) | Works for local dev. Breaks in ephemeral environments. |
+| Make it configurable via a new `registry.path` field (would require adding a `RegistrySection` to `config.py`, which doesn't exist today) | Flexible. Teams using CI must configure it explicitly. |
+| Inside the project directory (`.cartographer/registry.json`) | Portable with the project. Cannot support cross-project recall without a global fallback. |
 
-**Lean:** `~/.cartographer/registry.db` as the default, configurable via `registry.path`. CI environments set `CARTO_REGISTRY_PATH` to a suitable persistent volume.
+**Lean:** Keep `~/.cartographer/registry.json` as the default; add a `registry.path` config field (and a `CARTO_REGISTRY_PATH` env override) when this is actually implemented. Neither exists yet.
 
 **Status:** Open. Blocks final registry design.
 
@@ -149,15 +149,15 @@ These questions do not block Phase 1 but must be resolved before Phase 2 impleme
 
 ---
 
+## Closed questions
+
 ### OQ-08: Standards Registry storage backend
 
 **Question:** What is the storage backend for the Standards Registry -- S3, an S3-compatible store (R2, MinIO), or a lightweight database-backed service?
 
-**Why it matters:** The registry is append-only immutable versioned objects. S3 is a natural fit. R2 avoids AWS egress fees. MinIO works for fully self-hosted deployments.
+**Decision:** S3, as the AWS reference deployment. The pack-version object format and fetch contract (versioned immutable objects at `packs/<name>/<version>/standards.md`, `packs/<name>/latest.json`) are specified independently of the store, so an S3-compatible backend (R2, MinIO) can substitute later via a config change without a schema change.
 
-**Lean:** S3 as the AWS reference deployment. S3-compatible interface documented so R2 or MinIO can substitute with a config change.
-
-**Status:** Open. Blocks Standards Registry design.
+**Decided by:** Hendrick, 2026-10-05, to unblock phasing the Standards Registry track. No ADR written -- this is a storage-vendor pick within an already-documented design (`ARCHITECTURE.md` §7), not an architecture tradeoff.
 
 ---
 
@@ -165,16 +165,9 @@ These questions do not block Phase 1 but must be resolved before Phase 2 impleme
 
 **Question:** Who can author a standards pack draft, and who can approve it for publishing? Is approval one person or a quorum?
 
-**Options:**
+**Decision:** One approval required. Any authenticated user with the Author role can create/edit a draft; any Reviewer other than that draft's Author can approve and publish it (an Author cannot approve their own draft -- already stated in `APPLICATION_ARCHITECTURE.md` §2.2). No per-pack author/reviewer assignment in the first version -- roles are global, not scoped per pack.
 
-| Option | Tradeoff |
-|---|---|
-| Any authenticated user can author; any Reviewer can approve | Open. Low friction. Risk of low-quality content. |
-| Authors must be designated per-pack; Reviewers are global | Pack-specific accountability. More admin overhead. |
-| One approval required | Simple. Single point of approval. |
-| Two approvals required (four-eyes principle) | Stronger quality control. Slower for small teams. |
-
-**Status:** Open. Blocks web app auth design and the review screen spec.
+**Decided by:** Hendrick, 2026-10-05, to unblock phasing the Standards Registry track. No ADR written.
 
 ---
 
@@ -182,26 +175,9 @@ These questions do not block Phase 1 but must be resolved before Phase 2 impleme
 
 **Question:** When `stacks.registry_url` is set and the registry is unreachable at `stack add` or `init` time, should the CLI fail loudly or fall back silently to bundled pack versions?
 
-**Options:**
+**Decision:** Warn and fall back by default (`stacks.registry_fallback = "warn"`): log the error with the registry URL, use the bundled pack version, exit `0`. `"error"` is available as an explicit opt-in for teams that want `init`/`stack add` to fail hard on a registry outage.
 
-| Option | Tradeoff |
-|---|---|
-| Silent fallback, log a warning | Never breaks `init`. May silently use stale bundled versions. |
-| Fail loudly if registry is configured | Forces the team to notice the outage. Breaks `init` on network issues. |
-| Configurable: `stacks.registry_fallback = "warn" or "error"` | Flexible. Adds a config knob. |
-
-**Lean:** Warn and fall back by default (`"warn"`), with `"error"` available for teams that want strict registry enforcement.
-
-**Status:** Open. Blocks `stack add` and `init` implementation for the registry-fetch path.
-
----
-
-## Closed questions
-
-No questions have been closed yet. When a question is resolved, move it here with:
-- The decision made.
-- Who made it and when.
-- A link to the ADR if one was written.
+**Decided by:** Hendrick, 2026-10-05, to unblock phasing the Standards Registry track. No ADR written.
 
 ---
 

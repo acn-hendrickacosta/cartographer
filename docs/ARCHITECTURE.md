@@ -214,19 +214,24 @@ This section describes one concrete way to run the central topology on AWS. It i
 
 | Concern | AWS service | Notes |
 |---|---|---|
-| Pack storage | Amazon S3 | Each published pack version is an immutable object keyed by `<pack-name>/<version>/`. Versioned bucket. |
-| Pack distribution | Amazon CloudFront | CDN in front of S3 for low-latency reads from CLI across regions. |
-| CLI fallback | Bundled pack in the CLI package | The CLI falls back to bundled defaults when S3/CloudFront is unreachable or unconfigured. |
+| Pack storage | Amazon S3 (private, no public access) | Each published pack version is an immutable zip archive keyed by `packs/<pack-name>/<version>/standards.zip`. Versioned bucket. Only the web app's backend (via IRSA) and the admin publish script (direct IAM credentials) can read or write it. |
+| Pack distribution | The web app's own authenticated API (§7.3), not a CDN | **Corrected 2026-10-05:** the original design put CloudFront in front of a public-read S3 bucket so the CLI could fetch pack content directly, with no request-level auth. That means anyone with a pack's URL could read it, and there was no way to audit or restrict who fetches what. Removed. The CLI now authenticates to the web app's API with a per-project token (same pattern as `promotion_token` for central VDB/KG) and fetches pack content through it; S3 is never reached directly by the CLI. See `phases/sr-2-webapp-auth-and-read-views.md`. |
+| CLI fallback | Bundled pack in the CLI package | The CLI falls back to bundled defaults when the registry API is unreachable, the token is invalid, or `stacks.registry_url` is unconfigured. |
 
 ### 7.3 Standards web app
 
 | Concern | AWS service | Notes |
 |---|---|---|
-| Compute | Amazon ECS Fargate | Containerized application, no server management. |
-| Load balancing | Application Load Balancer (ALB) | Terminates TLS, routes to ECS tasks. |
-| Auth | Amazon Cognito | User pools for SME authoring accounts. Cognito JWT authorizer on ALB or API Gateway. |
-| Persistent state | Amazon DynamoDB or RDS | Draft state, review workflow records, published-version index. Choice pending; see open questions. |
-| Pack publish writes | S3 (via service) | The web app writes immutable pack versions to the Standards Registry S3 bucket on publish approval. |
+| Compute | Amazon EKS (Elastic Kubernetes Service) | Web app runs as a standard Kubernetes `Deployment` (container image, replica count, rolling updates, `HorizontalPodAutoscaler` for scale). Chosen 2026-10-05 over ECS Fargate specifically so the same manifests are portable to any Kubernetes cluster if the AWS dependency is ever dropped later -- see the note below. |
+| Load balancing | AWS Load Balancer Controller + Kubernetes `Ingress` | The in-cluster Ingress controller provisions an ALB automatically from a standard `Ingress` resource (TLS termination, routing to the Service). Same ALB as before; it's now provisioned declaratively from Kubernetes rather than an ECS task definition. |
+| Auth | Amazon Cognito | User pools for SME authoring accounts. Cognito JWT authorizer in front of the Ingress (or validated in-app), unchanged from the ECS design. |
+| Persistent state | PostgreSQL -- the same instance the central VDB backend (§7.1) already uses, in a separate database (`cartographer_webapp`) | Registry API tokens (SR.2), and from SR.3: draft state, review workflow records. Decided 2026-10-05 to avoid running a second stateful service (DynamoDB) alongside Postgres purely for app state; see `app/db.py` and `app/tokens.py` in `webapp/backend/`. |
+| Pack publish writes | S3 (via service) | The web app writes immutable pack versions to the Standards Registry S3 bucket on publish approval. Pod-level S3 access is granted via IRSA (IAM Roles for Service Accounts) -- the EKS-native equivalent of an ECS task IAM role. |
+| Pack reads (CLI + web app UI) | Served by this same application, not S3 directly | `GET /api/packs/:name/content`, bearer-token authenticated (per-project token for the CLI; Cognito JWT for the web app's own frontend). Validates the caller, then reads from S3 server-side (via the same pod IRSA role) and returns the zip bytes. See §7.2's correction note -- the CLI never reaches S3 or a CDN directly. |
+
+**Why EKS, not ECS Fargate (decided 2026-10-05):** the web app needed to be deployable on Kubernetes. The deployment stays AWS-managed-service-first (Cognito, S3 unchanged) -- only the compute/orchestration layer moved from ECS Fargate to EKS. This is a narrower change than a fully cloud-agnostic Kubernetes deployment would be (which would also swap Cognito for a portable OIDC provider and S3 for an in-cluster S3-compatible store); that broader portability was explicitly not requested. If full portability is wanted later, the Kubernetes manifests from this phase already provide the compute portability -- only the remaining AWS-managed-service rows above would need to change.
+
+**Why Postgres, not DynamoDB, for persistent state (decided 2026-10-05):** the central VDB backend (§7.1) already requires a Postgres (pgvector) instance. Standing up DynamoDB as a second stateful service purely for the web app's own state (registry tokens, and from SR.3 draft/review records) added operational footprint for no real benefit -- the access patterns (lookup by key, filter by status) are simple relational queries. A separate database within the same instance (`cartographer_webapp`, distinct from the VDB's own database) keeps the two concerns from colliding while still only running one database technology. This does mean the web app's pods need network-level reachability to wherever that Postgres instance lives (security groups/VPC, not just an IAM policy the way DynamoDB access would be) -- see `webapp/k8s/networkpolicy.yaml`'s egress rule for port 5432.
 
 ### 7.4 Networking and isolation
 

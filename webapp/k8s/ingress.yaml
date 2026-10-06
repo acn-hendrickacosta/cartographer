@@ -1,0 +1,26 @@
+# Assumes the AWS Load Balancer Controller is already installed on the
+# existing shared cluster (per ARCHITECTURE.md Sec 7.3) -- if the cluster uses
+# a different ingress controller, drop the alb.ingress.kubernetes.io
+# annotations and set the correct ingressClassName instead.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: standards-webapp
+  namespace: standards-webapp
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+spec:
+  ingressClassName: alb
+  rules:
+    - host: REPLACE-ME.example.com  # must match configmap.yaml's BASE_URL and Cognito's callback URL
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: standards-webapp
+                port:
+                  number: 80

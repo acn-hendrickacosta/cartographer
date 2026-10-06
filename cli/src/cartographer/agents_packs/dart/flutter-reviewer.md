@@ -44,6 +44,10 @@ RETURN b.path, b.attrs LIMIT 10
 
 Run these after identifying changed files from the diff. Review any files the KG shows are callers or importers — they are also in scope.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): `Grep` for the changed file's widget/class names across the codebase to approximate
+callers and importers instead.
+
 ## Workflow
 
 ### Step 1: Gather Context

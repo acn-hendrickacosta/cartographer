@@ -33,6 +33,10 @@ WHERE b.attrs CONTAINS 'findAll' OR b.attrs CONTAINS 'findMany' OR b.attrs CONTA
 RETURN [n IN nodes(path) | n.path] LIMIT 10
 ```
 
+**If `kg_query`/`vdb_search` are not in your available tools** (this project has indexing
+disabled): `Grep` for the table/model name across the codebase to find the files that touch it, and
+treat Step 2 below as your primary way to locate schema/migration files, not just a supplement.
+
 ### Step 2: Locate schema and migration files (for things the KG cannot detect)
 
 Scan for schema files not yet indexed or not reachable via the KG:

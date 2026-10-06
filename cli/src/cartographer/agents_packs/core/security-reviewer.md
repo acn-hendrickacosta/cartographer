@@ -37,6 +37,10 @@ RETURN [n IN nodes(path) | n.path] LIMIT 10
 
 Read only the files this step surfaces. Any file in the call graph that touches auth or user input is in scope.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): `Grep` for `auth`/`session`/`token`/`requireAuth`/`authenticate` across the codebase to
+establish scope instead, then proceed directly to Step 2's pattern scans.
+
 ### Step 2: Pattern-based vulnerability scans
 
 These scans cannot be done by the KG — run them after Step 1 has established scope:

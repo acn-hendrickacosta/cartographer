@@ -54,6 +54,10 @@ RETURN b.path LIMIT 10
 
 Read only the files these queries return.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): skip straight to Step 3's `grep`/`find` patterns below to locate affected documentation
+instead — they find the same category of references without the KG.
+
 ### Step 3: Identify Documentation to Update
 
 For each changed file, find associated documentation:

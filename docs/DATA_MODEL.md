@@ -12,7 +12,7 @@ Cartographer maintains three logical stores per deployment. Each has a distinct 
 |---|---|---|---|
 | VDB | Semantic recall: find relevant chunks of code, specs, or docs given a natural-language query | LanceDB (embedded) | Approximate nearest-neighbor over embeddings |
 | KG | Structural recall: find artifacts by relationship, navigate dependencies, anchor specs to code | Kuzu (embedded) | Graph traversal, pattern match |
-| Registry | Project inventory: track which projects exist, their topology, and their index locations | SQLite (local file) | Key-value and filter lookup |
+| Registry | Project inventory: track which projects exist, their topology, and their index locations | JSON (local file) | Key-value and filter lookup |
 
 The VDB and KG are complementary. The VDB finds relevant content when the query is fuzzy ("how did we handle auth in the billing service?"). The KG finds related artifacts when the relationship is known ("what symbols implement this spec node?", "what does this module depend on?"). Recall hooks query both and merge the results before injecting them into context.
 
@@ -209,11 +209,13 @@ The registry is a per-machine index of projects a developer has initialized. It 
 
 ### 5.2 Registry location
 
-In local-only topology, the registry is a single SQLite file stored per user, outside any project directory, so it persists across project checkouts and machine reboots.
+In local-only topology, the registry is a single JSON file stored per user, outside any project directory, so it persists across project checkouts and machine reboots.
 
-Default path: `~/.cartographer/registry.db`
+Path: `~/.cartographer/registry.json`, hardcoded in `cartographer/registry.py`'s `registry_path()`.
 
-This path is configurable. See `cartographer.example.toml`.
+This path is not currently configurable -- there is no `cartographer.toml` field that controls it. See [OPEN_QUESTIONS.md: OQ-04](OPEN_QUESTIONS.md) for the open question on whether it should become configurable, and [CONFIGURATION.md](CONFIGURATION.md) for the current config schema.
+
+*Corrected 2026-10-05: this section previously described the registry as a SQLite file at a configurable `~/.cartographer/registry.db` path. Reading `registry.py` directly shows it's a hardcoded JSON file; no `[registry]` section or `registry.path` field exists in `config.py`.*
 
 ---
 

@@ -29,6 +29,8 @@ cppcheck --enable=all src/ 2>/dev/null || echo "cppcheck not available"
 ```
 
 **After seeing the error, trace the import chain via the knowledge graph to find the root cause:**
+(if `kg_query`/`vdb_search` aren't in your available tools — this project has indexing disabled —
+use `grep -rn` for includes of the error file and for the missing symbol's definition instead.)
 
 **Find what imports the file with the error:**
 ```

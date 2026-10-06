@@ -30,6 +30,9 @@ if command -v cargo-audit >/dev/null; then cargo audit; else echo "cargo-audit n
 ```
 
 **After seeing the error, trace the import chain via the knowledge graph to find the root cause:**
+(if `kg_query`/`vdb_search` aren't in your available tools — this project has indexing disabled —
+use `grep -rn` for `use` statements of the error file and for the missing symbol's definition
+instead.)
 
 **Find what imports the file with the error:**
 ```

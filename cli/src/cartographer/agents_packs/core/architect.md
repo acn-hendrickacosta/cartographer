@@ -43,6 +43,11 @@ WHERE b.attrs CONTAINS '[spec keyword]'
 RETURN a.path LIMIT 10
 ```
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): use `Glob` to map the directory structure, `Grep` for spec/ADR documents (e.g. `docs/`,
+`adr/`) and for import/extends relationships, and `Read` the project's existing ADRs or design docs
+directly instead of querying for them.
+
 Read only the files these queries return. Then:
 - Identify patterns and conventions
 - Document technical debt
