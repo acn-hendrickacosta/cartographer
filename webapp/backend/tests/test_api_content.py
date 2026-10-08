@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app import s3_registry, tokens
+from app import packs_admin, s3_registry, tokens
 from app.main import app
 
 client = TestClient(app)
@@ -110,17 +110,34 @@ def test_fork_pack_already_forked_returns_409():
     assert resp.status_code == 409
 
 
-def test_fork_pack_no_baseline_returns_404():
+def test_fork_pack_no_baseline_and_not_registered_returns_404():
     with patch.object(tokens, "validate_token", return_value="proj_x"), \
          patch.object(s3_registry, "project_has_fork", return_value=False), \
-         patch.object(s3_registry, "fork_pack_for_project", side_effect=ValueError("pack 'nope' has no published version to fork")):
+         patch.object(s3_registry, "get_latest", return_value=None), \
+         patch.object(packs_admin, "pack_exists", return_value=False):
         resp = client.post("/api/packs/nope/fork", headers={"Authorization": "Bearer good-token"})
     assert resp.status_code == 404
+    assert "not registered" in resp.json()["detail"]
+
+
+def test_fork_pack_no_baseline_but_registered_creates_empty_fork():
+    """An enterprise-exclusive pack that was never published globally -- only
+    registered via /api/admin/packs -- can still be forked; the result has
+    forked_from: None rather than a real baseline version."""
+    with patch.object(tokens, "validate_token", return_value="proj_x"), \
+         patch.object(s3_registry, "project_has_fork", return_value=False), \
+         patch.object(s3_registry, "get_latest", return_value=None), \
+         patch.object(packs_admin, "pack_exists", return_value=True), \
+         patch.object(s3_registry, "fork_pack_for_project", return_value={"pack": "acme-harness", "version": "fork", "forked_from": None}):
+        resp = client.post("/api/packs/acme-harness/fork", headers={"Authorization": "Bearer good-token"})
+    assert resp.status_code == 200
+    assert resp.json() == {"pack": "acme-harness", "version": "fork", "forked_from": None}
 
 
 def test_fork_pack_success_returns_fork_result():
     with patch.object(tokens, "validate_token", return_value="proj_x"), \
          patch.object(s3_registry, "project_has_fork", return_value=False), \
+         patch.object(s3_registry, "get_latest", return_value={"pack": "python", "version": "1.2.3"}), \
          patch.object(s3_registry, "fork_pack_for_project", return_value={"pack": "python", "version": "fork", "forked_from": "1.2.3"}):
         resp = client.post("/api/packs/python/fork", headers={"Authorization": "Bearer good-token"})
     assert resp.status_code == 200

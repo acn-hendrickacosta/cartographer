@@ -45,15 +45,6 @@ KNOWN_PACKS = (
 )
 
 
-def _bundled_pack_dir(name: str) -> Path:
-    pack_dir = resources.files("cartographer").joinpath("standards_packs", name)
-    if not pack_dir.is_dir():
-        raise typer.BadParameter(
-            f"unknown stack pack '{name}', known packs: {', '.join(KNOWN_PACKS)}"
-        )
-    return Path(str(pack_dir))
-
-
 def _optional_bundled_dir(top: str, name: str) -> Path | None:
     """Return the path for a skills or agents sub-pack, or None if it doesn't exist."""
     d = resources.files("cartographer").joinpath(top, name)
@@ -153,12 +144,16 @@ def _fetch_registry_content(
 
 def _resolve_registry_settings(workspace: Path) -> tuple[str, str, str]:
     """Read stacks.registry_url / registry_fallback from cartographer.toml, and
-    registry_token from cartographer.local.toml, if they exist yet. A brand-new
-    `init` calls apply_pack before cartographer.toml is written (see init.py) --
-    config_exists is False there, so this returns ("", "warn", "") and the
-    bundled path below is used, same as today's behavior. A re-run of
-    `init --stack` or `stack add` on an already-configured project picks up
-    whatever registry_url/registry_token is already committed/configured."""
+    registry_token from cartographer.local.toml, if they exist yet. If neither
+    file exists at all (config_exists is False), this returns ("", "warn", "")
+    and the bundled path below is used -- that's only still possible for
+    commands other than `init` that call apply_pack against an uninitialized
+    workspace, since `init` itself now writes both files (including any
+    --registry-url/--registry-token it was given) before its own apply_pack
+    calls run, specifically so those flags take effect on a brand-new init's
+    very first run, not just a re-run. `stack add` on an already-configured
+    project picks up whatever registry_url/registry_token is already
+    committed/configured."""
     if not config_mod.config_exists(workspace):
         return "", "warn", ""
     try:
@@ -212,8 +207,21 @@ def apply_pack(workspace: Path, name: str) -> tuple[list[Path], list[Path], list
     registry_url, registry_fallback, registry_token = _resolve_registry_settings(workspace)
     provenance: dict[str, dict[str, list[str]]] = {"standards": {}, "skills": {}, "agents": {}}
 
-    # Standards → .claude/standards/<name>/
-    src_dir = _bundled_pack_dir(name)  # also validates name against KNOWN_PACKS
+    # Standards → .claude/standards/<name>/. `name` doesn't have to be one of
+    # the bundled KNOWN_PACKS as long as a registry is configured -- this is
+    # what lets a project consume a registry-only pack (an enterprise-
+    # exclusive standard/harness that was never published as part of a CLI
+    # release, see docs/phases/sr-5-project-forks.md's "Closing gap 2") the
+    # same way as any bundled one. Only reject outright when there's truly
+    # nowhere to get content from: not bundled AND no registry configured --
+    # preserves today's typo protection exactly for any project that hasn't
+    # adopted a registry at all.
+    src_dir = _optional_bundled_dir("standards_packs", name)
+    if src_dir is None and not registry_url:
+        raise typer.BadParameter(
+            f"unknown stack pack '{name}', known packs: {', '.join(KNOWN_PACKS)} "
+            "(or configure stacks.registry_url to fetch a registry-only pack)"
+        )
     dest_dir = workspace / ".claude" / "standards" / name
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -224,7 +232,7 @@ def apply_pack(workspace: Path, name: str) -> tuple[list[Path], list[Path], list
             registry_url, registry_fallback, registry_token, name, "standards",
             standards_registry.extract_pack_zip, dest_dir,
         )
-    if not fetched:
+    if not fetched and src_dir is not None:
         standards_written = _apply_bundled_standards(src_dir, dest_dir)
     # .claude/standards/<name>/ is already pack-isolated, so the complete
     # membership is just whatever's in it now -- unlike skills/agents below,
@@ -280,6 +288,17 @@ def apply_pack(workspace: Path, name: str) -> tuple[list[Path], list[Path], list
                 pack_agent_names = sorted(p.name for p in src.glob("*.md"))
         if pack_agent_names:
             provenance["agents"][pack_name] = pack_agent_names
+
+    if not (provenance["standards"].get(name) or provenance["skills"].get(name) or provenance["agents"].get(name)):
+        # A single missing content type (e.g. "angular has no agents") is
+        # normal and already silent. Zero content of *any* type for the whole
+        # pack name is almost certainly a typo, or a registry-only pack this
+        # project's token can't see (wrong tenant) -- worth a visible nudge
+        # rather than quietly reporting "0 standard(s), 0 skill(s), 0 agent(s)".
+        console.print(
+            f"[yellow]warning[/yellow]: pack '{name}' has no content of any kind -- "
+            "check for a typo, or make sure it's been registered/forked/published"
+        )
 
     _update_provenance_manifest(workspace, provenance)
     return standards_written, skills_written, agents_written
@@ -350,10 +369,22 @@ def fork(
         console.print(f"[red]FAIL[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    console.print(
-        f"forked '{name}' from baseline v{result['forked_from']} -- "
-        "this project's future fetches/pushes for this pack now use the fork"
-    )
+    # Scaffold the local standards dir unconditionally -- empty if nothing was
+    # copied (an enterprise-exclusive pack with no global baseline), so
+    # there's an obvious place to add the first file either way.
+    (workspace / ".claude" / "standards" / name).mkdir(parents=True, exist_ok=True)
+
+    if result["forked_from"]:
+        console.print(
+            f"forked '{name}' from baseline v{result['forked_from']} -- "
+            "this project's future fetches/pushes for this pack now use the fork"
+        )
+    else:
+        console.print(
+            f"forked '{name}' as a new, empty fork (no global baseline existed for this pack) -- "
+            f"add files under .claude/standards/{name}/ (and .claude/skills/, .claude/agents/ plus "
+            f"'cartographer stack adopt' for those two), then run 'cartographer stack push {name}'"
+        )
 
 
 def _push_content_type(
@@ -392,9 +423,15 @@ def push(
     manifest = _load_provenance_manifest(workspace)
     pushed_any = False
 
-    standards_files = manifest.get("standards", {}).get(name, [])
+    # Standards are read directly from disk, not the manifest -- the
+    # directory is already pack-isolated, so there's nothing to look up, and
+    # this is what lets push work even for a pack that was `fork`ed but never
+    # `stack add`-ed (e.g. an enterprise-exclusive pack authored entirely by
+    # hand, with no manifest entry at all).
+    standards_dir = workspace / ".claude" / "standards" / name
+    standards_files = sorted(p.name for p in standards_dir.glob("*.md")) if standards_dir.is_dir() else []
     if standards_files:
-        zip_bytes = standards_registry.build_flat_zip(workspace / ".claude" / "standards" / name, standards_files)
+        zip_bytes = standards_registry.build_flat_zip(standards_dir, standards_files)
         _push_content_type(registry_url, registry_token, name, "standards", zip_bytes)
         pushed_any = True
 
@@ -412,6 +449,61 @@ def push(
 
     if not pushed_any:
         console.print(
-            f"[yellow]note[/yellow]: no installed content found for pack '{name}' -- nothing to push "
-            "(run 'cartographer stack add' first so there's something on disk to push)"
+            f"[yellow]note[/yellow]: no installed content found for pack '{name}' -- nothing to push. "
+            "For standards, add files under .claude/standards/<name>/ directly. For skills/agents, "
+            "write the file then run 'cartographer stack adopt' to register it with this pack."
         )
+
+
+@app.command("adopt")
+def adopt(
+    name: str = typer.Argument(..., help="Pack name to adopt files into, e.g. acme-harness"),
+    content_type: str = typer.Argument(..., help="'skills' or 'agents' (standards never need this)"),
+    names: list[str] = typer.Argument(
+        ..., help="Skill name(s) (the directory name under .claude/skills/) or agent filename(s) "
+                   "(under .claude/agents/, .md suffix optional)"
+    ),
+    path: Path = typer.Option(Path("."), "--path", help="Workspace root"),
+) -> None:
+    """Register already-written local skill/agent files as belonging to a
+    pack, so `stack push` knows to include them.
+
+    Needed because .claude/skills/ and .claude/agents/ are shared, multi-pack
+    directories with no inherent isolation the way .claude/standards/<pack>/
+    has -- apply_pack already tracks this automatically for bundled/registry-
+    fetched content; `adopt` is only for files you wrote yourself (typically
+    for a pack that was never installed via `stack add`, e.g. an enterprise-
+    exclusive pack authored directly in this project). Adds to any existing
+    adopted names for this pack/content-type rather than replacing them.
+    Does not create the file itself -- write it first, then adopt it.
+    """
+    if content_type not in ("skills", "agents"):
+        console.print(
+            "[red]FAIL[/red] adopt only applies to 'skills' or 'agents' -- standards are read "
+            "directly from .claude/standards/<pack>/ by 'stack push', no registration needed"
+        )
+        raise typer.Exit(code=1)
+
+    workspace = path.resolve()
+    resolved: list[str] = []
+    if content_type == "skills":
+        for skill_name in names:
+            skill_file = workspace / ".claude" / "skills" / skill_name / "SKILL.md"
+            if not skill_file.exists():
+                console.print(f"[red]FAIL[/red] no such skill: {skill_file}")
+                raise typer.Exit(code=1)
+            resolved.append(skill_name)
+    else:
+        for agent_name in names:
+            filename = agent_name if agent_name.endswith(".md") else f"{agent_name}.md"
+            agent_file = workspace / ".claude" / "agents" / filename
+            if not agent_file.exists():
+                console.print(f"[red]FAIL[/red] no such agent file: {agent_file}")
+                raise typer.Exit(code=1)
+            resolved.append(filename)
+
+    manifest = _load_provenance_manifest(workspace)
+    existing = manifest.get(content_type, {}).get(name, [])
+    merged = sorted(set(existing) | set(resolved))
+    _update_provenance_manifest(workspace, {content_type: {name: merged}})
+    console.print(f"adopted into pack '{name}' ({content_type}): {', '.join(resolved)}")

@@ -5,20 +5,37 @@ Role comes from the Cognito group the user is a member of (Author/Reviewer/
 Admin, per APPLICATION_ARCHITECTURE.md Sec 2.2 -- "a user can hold more than
 one role", so this is a list, not a single value), read from the ID token's
 `cognito:groups` claim.
+
+Also supports a second login path, direct_login() below: Cognito's
+ADMIN_USER_PASSWORD_AUTH flow, called directly via boto3 instead of a browser
+redirect to the hosted UI. Added because the hosted-UI flow requires an HTTPS
+callback URL -- Cognito rejects any non-localhost HTTP redirect_uri outright
+-- which this deployment doesn't have yet (see the ECS deployment plan's
+"ALB's own default DNS name" gap). direct_login never touches a redirect_uri
+at all: it's a server-to-server call to Cognito's API (always HTTPS,
+independent of how the user's own browser reaches this app), so it works
+over plain HTTP. verify_id_token below is unchanged and reused as-is -- a
+Cognito ID token is a Cognito ID token regardless of which flow produced it.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 from urllib.parse import urlencode
 
+import boto3
 import httpx
 import jwt
+from botocore.exceptions import ClientError
 from fastapi import HTTPException, Request
 from jwt import PyJWKClient
 
 from app.settings import settings
 
 _jwk_client = PyJWKClient(settings.cognito_jwks_url)
+_cognito = boto3.client("cognito-idp", region_name=settings.aws_region)
 
 
 class SessionUser:
@@ -89,6 +106,54 @@ async def exchange_code_for_tokens(code: str) -> dict:
     if resp.status_code != 200:
         raise HTTPException(status_code=401, detail=f"token exchange failed: {resp.text}")
     return resp.json()
+
+
+def _secret_hash(username: str) -> str:
+    """Cognito requires this whenever the app client has a secret (ours
+    does), for any API-based auth flow -- HMAC-SHA256 of username+client_id,
+    keyed by the client secret, base64-encoded. Not needed for the hosted-UI
+    flow, which authenticates the client via Basic auth instead (see
+    exchange_code_for_tokens above)."""
+    message = (username + settings.cognito_client_id).encode("utf-8")
+    key = settings.cognito_client_secret.encode("utf-8")
+    digest = hmac.new(key, message, hashlib.sha256).digest()
+    return base64.b64encode(digest).decode("utf-8")
+
+
+def direct_login(email: str, password: str) -> SessionUser:
+    """ADMIN_USER_PASSWORD_AUTH: exchange an email/password directly for a
+    verified SessionUser, no browser redirect involved. Raises
+    HTTPException(401) for bad credentials, same as the hosted-UI path's
+    failure mode -- a wrong password is a client error, not a server error."""
+    try:
+        resp = _cognito.admin_initiate_auth(
+            UserPoolId=settings.cognito_pool_id,
+            ClientId=settings.cognito_client_id,
+            AuthFlow="ADMIN_USER_PASSWORD_AUTH",
+            AuthParameters={
+                "USERNAME": email,
+                "PASSWORD": password,
+                "SECRET_HASH": _secret_hash(email),
+            },
+        )
+    except ClientError as exc:
+        raise HTTPException(status_code=401, detail="invalid email or password") from exc
+
+    if resp.get("ChallengeName"):
+        # e.g. NEW_PASSWORD_REQUIRED for a user still on a temporary password.
+        # Not handled -- this path is for already-provisioned users with a
+        # permanent password (the seeded test users, or anyone an Admin has
+        # set up via AdminSetUserPassword with Permanent=True).
+        raise HTTPException(
+            status_code=401,
+            detail=f"login requires completing the '{resp['ChallengeName']}' challenge, not supported here",
+        )
+
+    id_token = resp["AuthenticationResult"]["IdToken"]
+    try:
+        return verify_id_token(id_token)
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail=f"id token verification failed: {exc}") from exc
 
 
 def current_user(request: Request) -> SessionUser:

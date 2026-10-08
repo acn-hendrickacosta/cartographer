@@ -11,7 +11,63 @@ import AdminLayout from './views/AdminLayout.jsx';
 import AdminUsers from './views/AdminUsers.jsx';
 import AdminPacks from './views/AdminPacks.jsx';
 import AdminTokens from './views/AdminTokens.jsx';
-import { getMe } from './api.js';
+import { getMe, login } from './api.js';
+
+function LoginForm({ onLoggedIn }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    setSubmitting(true);
+    try {
+      const user = await login(email, password);
+      onLoggedIn(user);
+    } catch (err) {
+      setError(err.message || 'login failed');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="view active">
+      <div className="view-header">
+        <h2>Cartographer Standards</h2>
+        <p>Sign in to browse published standards, skills, and agents.</p>
+      </div>
+      <form onSubmit={handleSubmit} className="login-form">
+        <label>
+          Email
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoComplete="username"
+          />
+        </label>
+        <label>
+          Password
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            autoComplete="current-password"
+          />
+        </label>
+        {error && <p className="login-error">{error}</p>}
+        <button className="btn" type="submit" disabled={submitting}>
+          {submitting ? 'Signing in…' : 'Log in'}
+        </button>
+      </form>
+    </div>
+  );
+}
 
 export default function App() {
   // null = still checking, false = logged out, object = logged in user
@@ -35,13 +91,7 @@ export default function App() {
       <>
         <div className="bg-glow" aria-hidden="true" />
         <main className="content">
-          <div className="view active">
-            <div className="view-header">
-              <h2>Cartographer Standards</h2>
-              <p>Sign in to browse published standards, skills, and agents.</p>
-            </div>
-            <a className="btn" href="/login">Log in</a>
-          </div>
+          <LoginForm onLoggedIn={setUser} />
         </main>
       </>
     );

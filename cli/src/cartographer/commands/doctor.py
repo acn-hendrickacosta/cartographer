@@ -36,6 +36,8 @@ def run(
     local_dir = workspace / ".cartographer" / "local"
     indexing_enabled = cfg.topology.mode != "none"
 
+    serve = serve_state.current_running_state() if indexing_enabled else None
+
     if not indexing_enabled:
         console.print("[yellow]INFO[/yellow] indexing disabled (topology=none) -- skipping local KG/VDB checks")
     else:
@@ -47,6 +49,14 @@ def run(
 
         if kg.is_readable(local_dir / "kg.kuzu"):
             console.print("[green]OK[/green]   local KG opens")
+        elif serve is not None:
+            # Kuzu's single-writer-per-file lock (see kg.py's _connect docstring)
+            # means a read-only open from this process can never succeed while
+            # `cartographer serve` holds the write handle -- expected and healthy,
+            # not a failure. Without this check, doctor would always report FAIL
+            # for the KG on every actively-served project, which is the common
+            # case, not an edge case.
+            console.print("[green]OK[/green]   local KG is managed by the running 'cartographer serve' (write-locked, as expected)")
         else:
             console.print("[red]FAIL[/red] local KG not readable")
             healthy = False
@@ -60,11 +70,12 @@ def run(
 
         try:
             from cartographer.indexing.central import get_central_vdb
+            vdb_driver_name = cfg.central.vdb_driver
             central_vdb = get_central_vdb(cfg, override)
             if central_vdb.is_reachable():
-                console.print("[green]OK[/green]   central VDB (pgvector) is reachable")
+                console.print(f"[green]OK[/green]   central VDB ({vdb_driver_name}) is reachable")
             else:
-                console.print("[red]FAIL[/red] central VDB (pgvector) is not reachable; check [central_vdb] in .cartographer.local.toml")
+                console.print(f"[red]FAIL[/red] central VDB ({vdb_driver_name}) is not reachable; check [central_vdb]/[central_vdb_s3] in .cartographer.local.toml")
                 healthy = False
         except (ValueError, NotImplementedError) as exc:
             console.print(f"[yellow]INFO[/yellow] central VDB: {exc}")
@@ -85,7 +96,6 @@ def run(
             console.print("[yellow]INFO[/yellow] central KG: neo4j not installed; run: pip install 'cartographer[central]'")
 
     if indexing_enabled:
-        serve = serve_state.current_running_state()
         if serve is not None:
             kg_health = serve_state.check_health(serve.kg_port)
             watching = bool((kg_health or {}).get("watch"))

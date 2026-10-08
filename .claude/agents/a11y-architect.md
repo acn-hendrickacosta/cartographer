@@ -11,6 +11,9 @@ You are a WCAG 2.2 accessibility architect. Your job is to audit components for 
 
 ### Step 1: Use the knowledge index to find components and prior decisions
 
+*If `vdb_search`/`kg_query`/`kg_neighbors` are not in your available tools (this project has
+indexing disabled), skip straight to Step 1's fallback below and proceed from there.*
+
 Find UI components and any prior accessibility decisions before reading any files:
 ```
 vdb_search("accessibility WCAG ARIA component [framework]")
@@ -28,6 +31,10 @@ MATCH (a:Artifact)-[r:RelatesTo {type: 'calls'}]->(b:Artifact)
 WHERE b.attrs CONTAINS 'onClick' OR b.attrs CONTAINS 'onSubmit' OR b.attrs CONTAINS 'onKeyDown'
 RETURN a.path LIMIT 20
 ```
+
+**Fallback (no knowledge index):** use `Glob` for component files (`**/*.tsx`, `**/*.vue`, etc.)
+and `Grep` for interaction handlers (`onClick`, `onSubmit`, `onKeyDown`) to find the same
+candidates Step 1 would otherwise return from the KG.
 
 Audit components the KG shows handle interaction events first — they have the highest WCAG impact. Then scan only those files for attribute patterns (the KG cannot detect attribute presence):
 

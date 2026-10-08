@@ -38,6 +38,17 @@ def create_pack(name: str) -> dict | None:
     return {"name": row[0], "deprecated_at": None, "created_at": row[2].isoformat()}
 
 
+def pack_exists(name: str) -> bool:
+    """Whether this pack name is registered at all, regardless of deprecation
+    or published-content status. Used by the fork route (main.py) to decide
+    whether an unpublished pack name is legitimate to fork into an empty
+    fork, versus an unregistered typo that should 404 instead of silently
+    creating an orphan S3 prefix."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM packs WHERE name = %s", (name,))
+        return cur.fetchone() is not None
+
+
 def is_deprecated(name: str) -> bool:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT deprecated_at FROM packs WHERE name = %s", (name,))

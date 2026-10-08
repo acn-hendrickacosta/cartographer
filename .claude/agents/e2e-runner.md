@@ -38,6 +38,11 @@ RETURN b.path LIMIT 20
 
 Use existing page objects from the VDB search before creating new ones. Use KG-discovered `data-testid` values as stable locators.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): `Glob` for existing `*.spec.ts`/page-object files (same patterns Step 2 below already
+looks for) and `Grep` for `data-testid`/`getByRole`/`getByLabel` usages in the page/route being
+tested to find stable locators instead.
+
 ### Step 2: Detect Playwright setup
 
 ```bash

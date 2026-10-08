@@ -44,6 +44,10 @@ vdb_search("type safety encapsulation [language] patterns")
 
 A type that is imported in many files but consistently wrapped in casts at call sites signals a design problem — the KG will show this pattern. Look for `as TypeName` in the files the KG returns. Read only those files before applying the evaluation criteria below.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): `Grep` for the type/interface name to find its import sites and usages, and `Grep` for
+`as TypeName` near those usages to spot the same cast-heavy pattern the KG would otherwise surface.
+
 ## Evaluation Criteria
 
 ### 1. Invariant Enforcement

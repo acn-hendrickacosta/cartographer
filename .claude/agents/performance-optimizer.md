@@ -46,6 +46,12 @@ RETURN a.path, b.path LIMIT 20
 
 Read only the files this step identifies. Do not scan the whole codebase for "slow looking" code.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): `Grep` for the entry point / function name's call sites to approximate "heavily called,"
+and `Grep` for `cache`/`memo` across the codebase to find existing caching sites before adding a new
+one. Less precise than the KG's caller counts, but the same candidates are usually findable this way
+in a codebase of reasonable size.
+
 ### Step 2: Establish Baseline
 
 Before any change, capture current metrics:

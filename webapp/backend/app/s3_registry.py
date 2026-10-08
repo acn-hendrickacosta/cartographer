@@ -229,27 +229,32 @@ def project_has_fork(pack_name: str, project_id: str) -> bool:
 
 
 def fork_pack_for_project(pack_name: str, project_id: str) -> dict:
-    """Copies the pack's current global baseline content into a project-owned
-    namespace ("projects/<project_id>/packs/<pack_name>/..."), so that
-    project's future fetches (see main.py's api_pack_content) and pushes
-    (see the fork content-type route) target this copy instead of the shared
-    baseline. One-time: callers must check project_has_fork first and 409 if
-    a fork already exists, since re-running this would silently discard
-    anything already pushed to the fork.
+    """Copies the pack's current global baseline content (if any) into a
+    project-owned namespace ("projects/<project_id>/packs/<pack_name>/..."),
+    so that project's future fetches (see main.py's api_pack_content) and
+    pushes (see the fork content-type route) target this copy instead of the
+    shared baseline. One-time: callers must check project_has_fork first and
+    409 if a fork already exists, since re-running this would silently
+    discard anything already pushed to the fork.
 
-    Raises ValueError if the pack has no published baseline at all -- callers
-    turn that into a 404, there's nothing to copy."""
+    If the pack has no published baseline at all -- an enterprise-exclusive
+    pack meant to live only inside this project's fork, never shared
+    globally -- creates an empty fork instead of failing; `forked_from` is
+    `None` in that case. Never raises for a missing baseline: callers (the
+    fork route) are responsible for deciding whether an unpublished pack name
+    is legitimate to fork at all (see packs_admin.pack_exists) before calling
+    this."""
     latest = get_latest(pack_name)
-    if not latest:
-        raise ValueError(f"pack '{pack_name}' has no published version to fork")
-
-    for content_type in CONTENT_TYPES:
-        zip_bytes = get_content_zip(pack_name, latest["version"], content_type)
-        if zip_bytes is not None:
-            put_content_zip(pack_name, FORK_VERSION, content_type, zip_bytes, project_id=project_id)
+    forked_from = None
+    if latest:
+        for content_type in CONTENT_TYPES:
+            zip_bytes = get_content_zip(pack_name, latest["version"], content_type)
+            if zip_bytes is not None:
+                put_content_zip(pack_name, FORK_VERSION, content_type, zip_bytes, project_id=project_id)
+        forked_from = latest["version"]
 
     put_latest(pack_name, FORK_VERSION, project_id=project_id)
-    return {"pack": pack_name, "version": FORK_VERSION, "forked_from": latest["version"]}
+    return {"pack": pack_name, "version": FORK_VERSION, "forked_from": forked_from}
 
 
 def list_skills_in_zip(zip_bytes: bytes) -> dict[str, dict[str, str]]:

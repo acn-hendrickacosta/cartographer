@@ -18,6 +18,7 @@ from cartographer import claude_merge, config as config_mod, registry
 from cartographer.artifact_id import compute_project_id
 from cartographer.commands.stack import apply_pack
 from cartographer.indexing import kg, vdb
+from cartographer.runtime import serve_state
 
 console = Console()
 
@@ -82,6 +83,17 @@ def run(
     stacks: str = typer.Option("", "--stacks", help="Comma-separated stack packs, e.g. python,react"),
     topology: str = typer.Option("", "--topology", help="local, central, or none (default: preserve existing, or 'local' for new projects)"),
     name: str = typer.Option("", "--name", help="Project name; defaults to the workspace directory name"),
+    registry_url: str = typer.Option(
+        "", "--registry-url", help="Standards Registry URL, e.g. http://localhost:8000 (default: preserve existing, or unset)"
+    ),
+    registry_token: str = typer.Option(
+        "", "--registry-token",
+        help="Per-project bearer token for the Standards Registry. Which pack content gets pulled "
+             "(the shared baseline, or this project's own fork, if one exists) is determined entirely "
+             "by this token -- never by a separate project name or id, so one project can't read "
+             "another's fork just by knowing its name. Prefer the CARTO_REGISTRY_TOKEN env var over "
+             "this flag where shell history/process-list exposure of secrets is a concern.",
+    ),
 ) -> None:
     workspace = path.resolve()
     workspace.mkdir(parents=True, exist_ok=True)
@@ -129,30 +141,22 @@ def run(
     else:
         console.print("  skills: archaeology/recall skipped (topology=none -- no index for them to use)")
 
-    apply_pack(workspace, "cross-stack")
-    console.print("  standards + skills + agents: cross-stack baseline applied")
-
-    requested_stacks = [s.strip() for s in stacks.split(",") if s.strip()]
-    for pack_name in requested_stacks:
-        apply_pack(workspace, pack_name)
-        console.print(f"  standards + skills + agents: {pack_name} pack applied")
-
+    # Config (cartographer.toml + cartographer.local.toml) is written here, before the
+    # apply_pack calls below -- specifically so --registry-url/--registry-token passed
+    # to a brand-new init take effect on this same run. Previously a first-ever init
+    # could never use the registry at all, since apply_pack ran before any config
+    # existed on disk for _resolve_registry_settings to read (see its docstring in
+    # commands/stack.py) -- only a second run could. A plain init with neither flag
+    # behaves identically to before; this only changes when a config write that was
+    # always going to happen anyway happens relative to apply_pack.
     project_id = compute_project_id(workspace)
-    if indexing_enabled:
-        local_dir = workspace / LOCAL_INDEX_REL
-        vdb.ensure_collection(local_dir / "vdb.lance", scope="local")
-        kg.ensure_namespace(local_dir / "kg.kuzu")
-        console.print(f"  local index provisioned at {local_dir}")
-    else:
-        console.print(
-            "  local index: skipped (topology=none) -- existing .cartographer/local/, if any, is left untouched"
-        )
-
+    requested_stacks = [s.strip() for s in stacks.split(",") if s.strip()]
     active_stacks = sorted({"cross-stack", *requested_stacks})
     if existing_cfg:
         # Preserve everything init.py doesn't explicitly own. stacks.active is
         # the one StacksSection field init.py computes itself (from --stacks);
-        # registry_url/registry_fallback carry over from the existing config.
+        # registry_fallback carries over from the existing config; registry_url
+        # carries over too unless --registry-url overrides it below.
         cfg = existing_cfg.model_copy(deep=True)
         cfg.project = config_mod.ProjectSection(id=project_id, name=project_name)
         cfg.topology = config_mod.TopologySection(mode=topology)
@@ -163,6 +167,8 @@ def run(
             topology=config_mod.TopologySection(mode=topology),
             stacks=config_mod.StacksSection(active=active_stacks),
         )
+    if registry_url:
+        cfg.stacks.registry_url = registry_url
     config_mod.save_config(workspace, cfg)
     console.print(f"  {config_mod.CONFIG_FILENAME} written")
 
@@ -171,16 +177,61 @@ def run(
     import secrets
     override = config_mod.load_local_override(workspace)
     local_cfg_existed = config_mod.local_config_path(workspace).exists()
-    changed = False
+    local_changed = False
     if topology == "central" and not override.promotion_token:
         override.promotion_token = secrets.token_hex(32)
-        changed = True
-    if not local_cfg_existed or changed:
+        local_changed = True
+    if registry_token and override.registry_token != registry_token:
+        override.registry_token = registry_token
+        local_changed = True
+    if not local_cfg_existed or local_changed:
         config_mod.save_local_override(workspace, override)
-        action = "written" if not local_cfg_existed else "updated (promotion_token added)"
+        action = "written" if not local_cfg_existed else "updated"
         console.print(f"  {config_mod.LOCAL_CONFIG_FILENAME} {action}")
     else:
         console.print(f"  {config_mod.LOCAL_CONFIG_FILENAME} already up to date")
+
+    if registry_token and not cfg.stacks.registry_url:
+        console.print(
+            "  [yellow]warning[/yellow]: --registry-token given but no registry_url configured "
+            "(pass --registry-url too, or set stacks.registry_url in cartographer.toml) -- "
+            "registry fetch will be skipped until it is"
+        )
+
+    apply_pack(workspace, "cross-stack")
+    console.print("  standards + skills + agents: cross-stack baseline applied")
+
+    for pack_name in requested_stacks:
+        apply_pack(workspace, pack_name)
+        console.print(f"  standards + skills + agents: {pack_name} pack applied")
+
+    if indexing_enabled:
+        local_dir = workspace / LOCAL_INDEX_REL
+        vdb.ensure_collection(local_dir / "vdb.lance", scope="local")
+        try:
+            kg.ensure_namespace(local_dir / "kg.kuzu")
+            console.print(f"  local index provisioned at {local_dir}")
+        except RuntimeError as exc:
+            # Kuzu's single-writer-per-file lock (see kg.py's _connect docstring)
+            # means a second process can never open the KG read-write while
+            # `cartographer serve` already holds it -- expected on any re-run of
+            # `init` against a workspace serve is actively watching, not a real
+            # failure: serve already owns schema creation/upkeep for this path.
+            # Only swallow the error once we've confirmed serve is actually the
+            # one holding the lock; otherwise this is a genuine problem (stale
+            # lock file, disk issue, etc.) and should still surface.
+            if "lock" in str(exc).lower() and serve_state.current_running_state() is not None:
+                console.print(
+                    f"  local index: KG schema check skipped -- 'cartographer serve' is already "
+                    f"running and holds the write lock on {local_dir / 'kg.kuzu'} (it already owns "
+                    "schema creation/upkeep for this workspace)"
+                )
+            else:
+                raise
+    else:
+        console.print(
+            "  local index: skipped (topology=none) -- existing .cartographer/local/, if any, is left untouched"
+        )
 
     if topology == "central":
         console.print(

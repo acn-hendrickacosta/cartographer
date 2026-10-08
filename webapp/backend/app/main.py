@@ -83,13 +83,33 @@ async def auth_callback(request: Request, code: str | None = None, error: str | 
 
 @app.get("/logout")
 def logout(request: Request):
+    # Cognito's hosted logout_uri is subject to the same HTTPS-only
+    # requirement as the login callback_url (see direct_login's docstring in
+    # app/auth.py) -- clearing the session server-side and returning here is
+    # sufficient regardless of which login path (hosted UI or direct) was
+    # used, since both just populate the same request.session["user"].
     request.session.clear()
-    return RedirectResponse(url=auth.hosted_ui_logout_url())
+    return RedirectResponse(url="/")
 
 
 # ---------------------------------------------------------------------------
 # JSON API (consumed by the React SPA)
 # ---------------------------------------------------------------------------
+
+class LoginBody(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/login")
+def api_login(request: Request, body: LoginBody):
+    """Direct ADMIN_USER_PASSWORD_AUTH login (see app/auth.py's
+    direct_login docstring) -- a fetch()-based alternative to GET /login's
+    hosted-UI redirect, for deployments without an HTTPS callback URL yet."""
+    user = auth.direct_login(body.email, body.password)
+    request.session["user"] = user.to_session_dict()
+    return {"email": user.email, "groups": user.groups}
+
 
 @app.get("/api/me")
 def api_me(request: Request):
@@ -477,10 +497,17 @@ def api_fork_pack(request: Request, name: str):
     if s3_registry.project_has_fork(name, project_id):
         raise HTTPException(status_code=409, detail=f"project already has a fork of '{name}'")
 
-    try:
-        return s3_registry.fork_pack_for_project(name, project_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # A pack with an existing global baseline can be forked by anyone,
+    # regardless of its `packs` row. One with no baseline at all is only
+    # forkable if an Admin registered the name first -- otherwise an empty
+    # fork would get silently created for any typo'd string.
+    if not s3_registry.get_latest(name) and not packs_admin.pack_exists(name):
+        raise HTTPException(
+            status_code=404,
+            detail=f"pack '{name}' is not registered -- ask an Admin to create it first (POST /api/admin/packs)",
+        )
+
+    return s3_registry.fork_pack_for_project(name, project_id)
 
 
 @app.put("/api/packs/{name}/fork/{content_type}")

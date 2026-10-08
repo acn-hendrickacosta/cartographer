@@ -63,6 +63,18 @@ def test_create_pack_returns_dict_for_new_name():
     assert result == {"name": "new-pack", "deprecated_at": None, "created_at": now.isoformat()}
 
 
+def test_pack_exists_true_for_registered_pack():
+    fake_get_connection, _ = _fake_connection(fetchone_result=(1,))
+    with patch.object(packs_admin, "get_connection", fake_get_connection):
+        assert packs_admin.pack_exists("python") is True
+
+
+def test_pack_exists_false_for_unregistered_pack():
+    fake_get_connection, _ = _fake_connection(fetchone_result=None)
+    with patch.object(packs_admin, "get_connection", fake_get_connection):
+        assert packs_admin.pack_exists("nope") is False
+
+
 def test_is_deprecated_false_for_active_pack():
     fake_get_connection, _ = _fake_connection(fetchone_result=(None,))
     with patch.object(packs_admin, "get_connection", fake_get_connection):

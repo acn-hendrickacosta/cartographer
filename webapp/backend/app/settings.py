@@ -26,11 +26,26 @@ class Settings:
     # CLI's own central VDB backend already uses, so this app doesn't add a
     # second stateful service (DynamoDB) alongside it. A separate database
     # within that instance/container (not the CLI test suite's own database)
-    # keeps the two concerns from colliding. In production this points at a
-    # real RDS/Aurora Postgres instance instead of the local Docker container.
+    # keeps the two concerns from colliding. In production this points at
+    # Aurora DSQL instead of the local Docker container -- see db_driver below.
     database_url: str = os.environ.get(
         "DATABASE_URL", "postgresql://cartographer:cartographer@localhost:5433/cartographer_webapp"
     )
+
+    # Aurora DSQL has no passwords -- auth is IAM-token-based exclusively, and
+    # tokens must be generated fresh per connection (a static DATABASE_URL
+    # DSN can't carry a live token). "postgres" (default) uses database_url
+    # unchanged, for local dev and any plain-Postgres deployment. "dsql"
+    # switches db.py to the aurora-dsql-python-connector's connection pool,
+    # which generates/refreshes IAM tokens automatically; the fields below
+    # are only read in that mode. See docs/phases/... ECS deployment notes
+    # and the Aurora DSQL user guide's "Generating an authentication token"
+    # section for why this split exists.
+    db_driver: str = os.environ.get("DB_DRIVER", "postgres")
+    db_host: str = os.environ.get("DB_HOST", "")
+    db_port: int = int(os.environ.get("DB_PORT", "5432"))
+    db_user: str = os.environ.get("DB_USER", "")
+    db_name: str = os.environ.get("DB_NAME", "postgres")
 
     session_secret: str = os.environ.get("SESSION_SECRET", "dev-only-insecure-secret-change-me")
 

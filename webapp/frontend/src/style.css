@@ -186,13 +186,22 @@ label {
   margin-bottom: 12px; max-width: 420px;
 }
 label input[type=text] { padding: 9px 13px; }
-textarea {
+textarea,
+input[type=text], input[type=email], input[type=password] {
   background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
-  border-radius: 14px; font-size: 0.85rem; font-family: var(--mono); padding: 13px 16px;
-  outline: none; resize: vertical; width: 100%;
+  border-radius: var(--radius-sm); font-size: 0.85rem; font-family: var(--sans); padding: 10px 14px;
+  outline: none; width: 100%; box-sizing: border-box;
   transition: border-color 0.2s var(--ease-soft), box-shadow 0.2s var(--ease-soft);
 }
-textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-dim); }
+textarea { resize: vertical; font-family: var(--mono); padding: 13px 16px; }
+textarea:focus, input[type=text]:focus, input[type=email]:focus, input[type=password]:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-dim);
+}
+input::placeholder { color: var(--text-faint); }
+
+.login-form { max-width: 340px; }
+.login-form .btn { margin-top: 4px; }
+.login-error { color: var(--danger); font-size: 0.82rem; }
 .editor-textarea { flex: 1; min-height: 360px; margin-bottom: 14px; }
 .editor-actions { display: flex; gap: 10px; }
 .editor-actions .btn:disabled, .editor-actions button:disabled { opacity: 0.35; cursor: default; }

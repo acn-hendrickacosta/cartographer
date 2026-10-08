@@ -45,4 +45,19 @@ def test_local_override_defaults_when_absent(tmp_path: Path) -> None:
     assert loaded.paths.local_index_dir == ".cartographer/local"
     assert loaded.central_vdb.host == "localhost"
     assert loaded.central_vdb.password == ""
+    assert loaded.central_vdb_s3.bucket == ""
+    assert loaded.central_vdb_s3.prefix == "vdb"
     assert loaded.promotion_token == ""
+
+
+def test_local_override_round_trip_central_vdb_s3(tmp_path: Path) -> None:
+    override = config_mod.LocalOverrideConfig()
+    override.central_vdb_s3.bucket = "cartographer-standards-registry-983883745126"
+    override.central_vdb_s3.prefix = "vdb"
+    override.central_vdb_s3.region = "us-east-1"
+    config_mod.save_local_override(tmp_path, override)
+
+    loaded = config_mod.load_local_override(tmp_path)
+    assert loaded.central_vdb_s3.bucket == "cartographer-standards-registry-983883745126"
+    assert loaded.central_vdb_s3.prefix == "vdb"
+    assert loaded.central_vdb_s3.region == "us-east-1"

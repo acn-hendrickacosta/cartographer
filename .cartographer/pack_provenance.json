@@ -1,0 +1,81 @@
+{
+  "standards": {
+    "cross-stack": [
+      "accessibility.md",
+      "api-design.md",
+      "architecture-decision-records.md",
+      "architecture-patterns.md",
+      "backend-patterns.md",
+      "build-failure-resolution.md",
+      "claude-code-usage.md",
+      "code-review.md",
+      "coding-style.md",
+      "containerization.md",
+      "contract-first-design.md",
+      "database-migrations.md",
+      "deployment.md",
+      "design-systems.md",
+      "e2e-testing.md",
+      "error-handling.md",
+      "feature-development.md",
+      "frontend-patterns.md",
+      "git-hygiene.md",
+      "kubernetes.md",
+      "mcp-server-patterns.md",
+      "postgresql.md",
+      "production-readiness.md",
+      "redis.md",
+      "security-baseline.md",
+      "spec-driven-workflow.md",
+      "tdd.md",
+      "testing.md"
+    ]
+  },
+  "skills": {
+    "core": [
+      "accessibility",
+      "api-design",
+      "architecture-decision-records",
+      "architecture-patterns",
+      "backend-patterns",
+      "containerization",
+      "contract-first",
+      "database-migrations",
+      "deployment-patterns",
+      "e2e-testing",
+      "error-handling",
+      "git-workflow",
+      "production-audit",
+      "security-review",
+      "tdd-workflow"
+    ],
+    "cox-aws-sandbox": [
+      "deploy-to-aws-sandbox"
+    ]
+  },
+  "agents": {
+    "core": [
+      "a11y-architect.md",
+      "architect.md",
+      "build-error-resolver.md",
+      "code-explorer.md",
+      "code-reviewer.md",
+      "code-simplifier.md",
+      "comment-analyzer.md",
+      "database-reviewer.md",
+      "doc-updater.md",
+      "e2e-runner.md",
+      "performance-optimizer.md",
+      "planner.md",
+      "pr-test-analyzer.md",
+      "refactor-cleaner.md",
+      "security-reviewer.md",
+      "silent-failure-hunter.md",
+      "tdd-guide.md",
+      "type-design-analyzer.md"
+    ],
+    "cox-aws-sandbox": [
+      "aws-sandbox-deployer.md"
+    ]
+  }
+}

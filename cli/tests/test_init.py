@@ -1,10 +1,18 @@
+import io
 import json
+import threading
+import zipfile
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from cartographer import config as config_mod, registry
 from cartographer.cli import app
+from cartographer.indexing import kg
+from cartographer.runtime import serve_state
 
 runner = CliRunner()
 
@@ -220,3 +228,183 @@ def test_doctor_passes_with_topology_none_and_no_index(tmp_path: Path, monkeypat
     assert result.exit_code == 0, result.output
     assert "indexing disabled" in result.output
     assert "all local checks passed" in result.output
+
+
+# ---------------------------------------------------------------------------
+# --registry-url / --registry-token on `init` (lets a brand-new init fetch
+# from the registry on its very first run, instead of requiring a manual
+# config edit + a second run)
+# ---------------------------------------------------------------------------
+
+VALID_TOKEN = "sk-init-flag-test-token"
+PACK_VERSION = "9.9.9"
+
+
+def _registry_zip() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("guide.md", "# From the registry\ninit-flag-marker\n")
+    return buf.getvalue()
+
+
+def _make_init_flag_handler():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.headers.get("Authorization", "") != f"Bearer {VALID_TOKEN}":
+                self.send_response(401)
+                self.end_headers()
+                return
+            parts = self.path.strip("/").split("/")
+            if len(parts) != 5 or parts[:2] != ["api", "packs"] or parts[3] != "content":
+                self.send_response(404)
+                self.end_headers()
+                return
+            content_type = parts[4]
+            if content_type != "standards":
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = _registry_zip()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("X-Pack-Version", PACK_VERSION)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    return Handler
+
+
+@pytest.fixture
+def init_flag_server():
+    server = HTTPServer(("127.0.0.1", 0), _make_init_flag_handler())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_init_registry_flags_fetch_on_first_run(tmp_path: Path, monkeypatch, init_flag_server) -> None:
+    """Regression guard for the previous behavior: a brand-new init used to be
+    unable to use the registry at all (config didn't exist yet when apply_pack
+    ran), requiring a manual config edit plus a second run. --registry-url/
+    --registry-token must make the very first run fetch."""
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    result = runner.invoke(app, [
+        "init", "--path", str(tmp_path), "--stacks", "python",
+        "--registry-url", init_flag_server, "--registry-token", VALID_TOKEN,
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert f"v{PACK_VERSION}" in result.output
+    content = (tmp_path / ".claude" / "standards" / "python" / "guide.md").read_text()
+    assert "init-flag-marker" in content
+
+    cfg = config_mod.load_config(tmp_path)
+    assert cfg.stacks.registry_url == init_flag_server
+    override = config_mod.load_local_override(tmp_path)
+    assert override.registry_token == VALID_TOKEN
+
+
+def test_init_registry_token_without_url_warns_and_skips_fetch(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    result = runner.invoke(app, ["init", "--path", str(tmp_path), "--registry-token", VALID_TOKEN])
+
+    assert result.exit_code == 0, result.output
+    assert "no registry_url configured" in result.output
+    override = config_mod.load_local_override(tmp_path)
+    assert override.registry_token == VALID_TOKEN  # still saved for later use
+
+
+def test_init_registry_token_rerun_updates_existing_local_override(tmp_path: Path, monkeypatch, init_flag_server) -> None:
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    first = runner.invoke(app, ["init", "--path", str(tmp_path)])
+    assert first.exit_code == 0, first.output
+    assert config_mod.load_local_override(tmp_path).registry_token == ""
+
+    second = runner.invoke(app, [
+        "init", "--path", str(tmp_path),
+        "--registry-url", init_flag_server, "--registry-token", VALID_TOKEN,
+    ])
+    assert second.exit_code == 0, second.output
+    assert config_mod.load_local_override(tmp_path).registry_token == VALID_TOKEN
+    assert config_mod.load_config(tmp_path).stacks.registry_url == init_flag_server
+
+
+# ---------------------------------------------------------------------------
+# KG single-writer lock conflict with a running `cartographer serve` (found
+# live: re-running `init` on a workspace serve already watches crashed with a
+# raw Kuzu "Could not set lock on file" RuntimeError -- see kg.py's _connect
+# docstring for why a second process can never open the KG read-write while
+# serve holds it. Expected and healthy, not a real failure, as long as serve
+# really is the one holding the lock.
+# ---------------------------------------------------------------------------
+
+_FAKE_SERVE_STATE = serve_state.ServeState(
+    pid=1, vdb_pid=1, kg_pid=1, vdb_port=1, kg_port=1, started_at="2026-01-01T00:00:00Z"
+)
+
+
+def test_init_skips_kg_schema_check_gracefully_when_serve_holds_lock(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    with patch.object(kg, "ensure_namespace", side_effect=RuntimeError("IO exception: Could not set lock on file")), \
+         patch.object(serve_state, "current_running_state", return_value=_FAKE_SERVE_STATE):
+        result = runner.invoke(app, ["init", "--path", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    normalized = " ".join(result.output.split())
+    assert "KG schema check skipped" in normalized
+    assert "already running" in normalized
+
+
+def test_init_reraises_kg_lock_error_when_serve_not_running(tmp_path: Path, monkeypatch) -> None:
+    """Regression: if the lock conflict can't be attributed to a running
+    serve, it's a genuine problem (stale lock file, disk issue, ...) and must
+    still surface, not be silently swallowed."""
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+
+    with patch.object(kg, "ensure_namespace", side_effect=RuntimeError("IO exception: Could not set lock on file")), \
+         patch.object(serve_state, "current_running_state", return_value=None):
+        result = runner.invoke(app, ["init", "--path", str(tmp_path)])
+
+    assert result.exit_code != 0
+
+
+def test_doctor_reports_ok_when_serve_holds_kg_lock(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+    runner.invoke(app, ["init", "--path", str(tmp_path)])
+
+    with patch.object(kg, "is_readable", return_value=False), \
+         patch.object(serve_state, "current_running_state", return_value=_FAKE_SERVE_STATE), \
+         patch.object(serve_state, "check_health", return_value={"watch": True}):
+        result = runner.invoke(app, ["doctor", "--path", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    normalized = " ".join(result.output.split())
+    assert "write-locked, as expected" in normalized
+    assert "all local checks passed" in normalized
+
+
+def test_doctor_still_fails_when_kg_unreadable_and_serve_not_running(tmp_path: Path, monkeypatch) -> None:
+    """Regression: a real KG problem with no serve process to explain it away
+    must still fail doctor, exactly as before this fix."""
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "registry-home" / "registry.json")
+    runner.invoke(app, ["init", "--path", str(tmp_path)])
+
+    with patch.object(kg, "is_readable", return_value=False), \
+         patch.object(serve_state, "current_running_state", return_value=None):
+        result = runner.invoke(app, ["doctor", "--path", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "FAIL" in result.output
+    assert "local KG not readable" in result.output

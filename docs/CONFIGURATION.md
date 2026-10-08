@@ -153,6 +153,12 @@ driver = "local"
 # Which central backend technology to use. Only meaningful when
 # topology.mode = "central". Connection details (host, credentials) go in
 # cartographer.local.toml, never here.
+#
+# vdb_driver: "pgvector" (PostgreSQL + pgvector) or "lancedb_s3" (LanceDB
+# pointed at an S3 bucket/prefix instead of a database). Use "lancedb_s3"
+# when the central Postgres-compatible cluster doesn't support extensions
+# (e.g. Aurora DSQL, which rejects CREATE EXTENSION outright) -- pgvector
+# is then not an option regardless of permissions.
 vdb_driver = "pgvector"
 kg_driver = "neo4j"
 ```
@@ -190,12 +196,23 @@ local_index_dir = ".cartographer/local"
 
 [central_vdb]
 # PostgreSQL connection details for the central pgvector backend.
+# Only read when [central].vdb_driver = "pgvector".
 # Prefer CARTO_CENTRAL_VDB_* environment variables in CI.
 host = "localhost"
 port = 5432
 user = "cartographer"
 password = ""                 # or CARTO_CENTRAL_VDB_PASSWORD
 database = "cartographer"
+
+[central_vdb_s3]
+# S3 location for the central LanceDB backend.
+# Only read when [central].vdb_driver = "lancedb_s3". No credentials here --
+# both developer machines and the ECS task role authenticate via the default
+# AWS credential chain (env vars, shared profile, or instance/task role).
+# Prefer CARTO_CENTRAL_VDB_S3_* environment variables in CI.
+bucket = ""                   # or CARTO_CENTRAL_VDB_S3_BUCKET
+prefix = "vdb"                # or CARTO_CENTRAL_VDB_S3_PREFIX
+region = ""                   # or CARTO_CENTRAL_VDB_S3_REGION
 
 [central_kg]
 # Neo4j connection details for the central KG backend.
@@ -233,6 +250,9 @@ Environment variables only override `cartographer.local.toml` fields, applied by
 | `CARTO_CENTRAL_VDB_USER` | `central_vdb.user` | |
 | `CARTO_CENTRAL_VDB_PASSWORD` | `central_vdb.password` | Set in CI |
 | `CARTO_CENTRAL_VDB_DATABASE` | `central_vdb.database` | |
+| `CARTO_CENTRAL_VDB_S3_BUCKET` | `central_vdb_s3.bucket` | Only used when `vdb_driver = "lancedb_s3"` |
+| `CARTO_CENTRAL_VDB_S3_PREFIX` | `central_vdb_s3.prefix` | |
+| `CARTO_CENTRAL_VDB_S3_REGION` | `central_vdb_s3.region` | |
 | `CARTO_CENTRAL_KG_URI` | `central_kg.uri` | |
 | `CARTO_CENTRAL_KG_USER` | `central_kg.user` | |
 | `CARTO_CENTRAL_KG_PASSWORD` | `central_kg.password` | Set in CI |
@@ -267,7 +287,7 @@ These rules are hard requirements, not recommendations.
 
 - `cartographer.toml` exists and parses into a valid `CartographerConfig`.
 - The local VDB (`vdb.lance`) and local KG (`kg.kuzu`) open successfully.
-- When `topology.mode = "central"`: `promotion_token` is present (info-level, not a failure if absent); the central VDB (pgvector) is reachable; the central KG (Neo4j) is reachable. Reachability failures are hard failures (exit `1`); missing optional driver packages or unconfigured credentials are info-level only.
+- When `topology.mode = "central"`: `promotion_token` is present (info-level, not a failure if absent); the central VDB (whichever of `pgvector`/`lancedb_s3` is configured) is reachable; the central KG (Neo4j) is reachable. Reachability failures are hard failures (exit `1`); missing optional driver packages or unconfigured credentials are info-level only.
 - Whether `cartographer serve` is currently running, and whether its watcher is active (info-level).
 - Whether Cartographer's MCP server entries are present in `.mcp.json` (info-level).
 - Whether `taxonomy.version` matches the CLI's canonical taxonomy version (info-level drift warning).

@@ -7,3 +7,4 @@ httpx==0.28.1
 itsdangerous==2.2.0
 python-multipart==0.0.20
 psycopg2-binary==2.9.10
+aurora-dsql-python-connector==0.2.7

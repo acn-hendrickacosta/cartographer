@@ -63,6 +63,10 @@ RETURN a.path LIMIT 10
 
 Mock only what the KG shows as external dependencies. Don't mock internal domain logic.
 
+**If `vdb_search`/`kg_query` are not in your available tools** (this project has indexing
+disabled): `Read` the file under test directly to see its imports (determines what to mock), and
+`Grep`/`Glob` for existing `*.test.*`/`*.spec.*` files near it to match the project's test style.
+
 ### Step 1: RED — Write a Failing Test
 
 Before writing any implementation, write the test. Run it. Confirm it fails for the right reason.

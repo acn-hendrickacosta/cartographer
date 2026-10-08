@@ -48,6 +48,18 @@ def test_env_overrides_take_precedence_over_file(tmp_path, monkeypatch):
     assert override.promotion_token == "file-token"  # unset in env, file value preserved
 
 
+def test_env_overrides_apply_for_central_vdb_s3(tmp_path, monkeypatch):
+    monkeypatch.setenv("CARTO_CENTRAL_VDB_S3_BUCKET", "ci-vdb-bucket")
+    monkeypatch.setenv("CARTO_CENTRAL_VDB_S3_PREFIX", "ci-vdb")
+    monkeypatch.setenv("CARTO_CENTRAL_VDB_S3_REGION", "us-west-2")
+
+    override = config_mod.load_local_override(tmp_path)
+
+    assert override.central_vdb_s3.bucket == "ci-vdb-bucket"
+    assert override.central_vdb_s3.prefix == "ci-vdb"
+    assert override.central_vdb_s3.region == "us-west-2"
+
+
 def test_no_env_vars_and_no_file_returns_defaults(tmp_path, monkeypatch):
     for var in ("CARTO_CENTRAL_VDB_HOST", "CARTO_CENTRAL_VDB_PASSWORD", "CARTO_PROMOTION_TOKEN"):
         monkeypatch.delenv(var, raising=False)

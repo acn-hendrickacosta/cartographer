@@ -134,6 +134,17 @@ class CentralVdbConfig(BaseModel):
     database: str = "cartographer"
 
 
+class CentralVdbS3Config(BaseModel):
+    """LanceDB-on-S3 connection details for the central VDB -- used when
+    central.vdb_driver = "lancedb_s3" instead of "pgvector". Provided by
+    admin, stored in gitignored local override. No credentials here: both
+    developer machines and the ECS task role authenticate via the default
+    AWS credential chain, not a stored key."""
+    bucket: str = ""
+    prefix: str = "vdb"
+    region: str = ""
+
+
 class CentralKgConfig(BaseModel):
     """Neo4j connection details -- provided by admin, stored in gitignored local override."""
     uri: str = "bolt://localhost:7687"
@@ -144,6 +155,7 @@ class CentralKgConfig(BaseModel):
 class LocalOverrideConfig(BaseModel):
     paths: LocalPathsSection = Field(default_factory=LocalPathsSection)
     central_vdb: CentralVdbConfig = Field(default_factory=CentralVdbConfig)
+    central_vdb_s3: CentralVdbS3Config = Field(default_factory=CentralVdbS3Config)
     central_kg: CentralKgConfig = Field(default_factory=CentralKgConfig)
     promotion_token: str = ""
     anthropic_api_key: str = ""  # Phase 4 kg_search: direct Claude API call, not a recursive MCP call
@@ -155,6 +167,7 @@ class LocalOverrideConfig(BaseModel):
         doc.add(tomlkit.comment("Never commit this file."))
         doc["paths"] = self.paths.model_dump()
         doc["central_vdb"] = self.central_vdb.model_dump()
+        doc["central_vdb_s3"] = self.central_vdb_s3.model_dump()
         doc["central_kg"] = self.central_kg.model_dump()
         if self.promotion_token:
             doc["promotion_token"] = self.promotion_token
@@ -214,6 +227,7 @@ def load_local_override(workspace: Path) -> LocalOverrideConfig:
         override = LocalOverrideConfig(
             paths=LocalPathsSection(**data.get("paths", {})),
             central_vdb=CentralVdbConfig(**data.get("central_vdb", {})),
+            central_vdb_s3=CentralVdbS3Config(**data.get("central_vdb_s3", {})),
             central_kg=CentralKgConfig(**data.get("central_kg", {})),
             promotion_token=str(data.get("promotion_token", "")),
             anthropic_api_key=str(data.get("anthropic_api_key", "")),
@@ -239,6 +253,13 @@ def _apply_env_overrides(override: LocalOverrideConfig) -> None:
         override.central_vdb.password = env["CARTO_CENTRAL_VDB_PASSWORD"]
     if env.get("CARTO_CENTRAL_VDB_DATABASE"):
         override.central_vdb.database = env["CARTO_CENTRAL_VDB_DATABASE"]
+
+    if env.get("CARTO_CENTRAL_VDB_S3_BUCKET"):
+        override.central_vdb_s3.bucket = env["CARTO_CENTRAL_VDB_S3_BUCKET"]
+    if env.get("CARTO_CENTRAL_VDB_S3_PREFIX"):
+        override.central_vdb_s3.prefix = env["CARTO_CENTRAL_VDB_S3_PREFIX"]
+    if env.get("CARTO_CENTRAL_VDB_S3_REGION"):
+        override.central_vdb_s3.region = env["CARTO_CENTRAL_VDB_S3_REGION"]
 
     if env.get("CARTO_CENTRAL_KG_URI"):
         override.central_kg.uri = env["CARTO_CENTRAL_KG_URI"]

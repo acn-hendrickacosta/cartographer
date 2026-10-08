@@ -176,13 +176,19 @@ def test_project_has_fork_false_when_no_fork_latest():
         assert s3_registry.project_has_fork("python", "proj_x") is False
 
 
-def test_fork_pack_for_project_raises_when_no_baseline():
-    with patch.object(s3_registry, "get_latest", return_value=None):
-        try:
-            s3_registry.fork_pack_for_project("nope", "proj_x")
-            assert False, "expected ValueError"
-        except ValueError as exc:
-            assert "nope" in str(exc)
+def test_fork_pack_for_project_creates_empty_fork_when_no_baseline():
+    """An enterprise-exclusive pack with no global baseline at all still
+    forks successfully -- just with nothing copied and forked_from: None.
+    Whether an unpublished name is *legitimate* to fork is the caller's
+    (main.py's) decision via packs_admin.pack_exists, not this function's."""
+    with patch.object(s3_registry, "get_latest", return_value=None), \
+         patch.object(s3_registry, "put_content_zip") as mock_put_content, \
+         patch.object(s3_registry, "put_latest") as mock_put_latest:
+        result = s3_registry.fork_pack_for_project("acme-harness", "proj_x")
+
+    mock_put_content.assert_not_called()
+    mock_put_latest.assert_called_once_with("acme-harness", s3_registry.FORK_VERSION, project_id="proj_x")
+    assert result == {"pack": "acme-harness", "version": s3_registry.FORK_VERSION, "forked_from": None}
 
 
 def test_fork_pack_for_project_copies_only_existing_content_types():

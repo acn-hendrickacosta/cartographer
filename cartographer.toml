@@ -8,7 +8,9 @@ name = "specbrain"
 mode = "local"
 
 [stacks]
-active = ["cross-stack", "python"]
+active = ["cross-stack"]
+registry_url = "http://cartographer-webapp-alb-776031912.us-east-1.elb.amazonaws.com"
+registry_fallback = "warn"
 
 [promotion]
 trigger = "manual"
@@ -20,6 +22,8 @@ tenant = "default"
 preload_tokens = 2000
 per_turn_tokens = 1000
 top_k = 8
+conflict_threshold_seconds = 0
+conflict_notice = true
 
 [backends.vdb]
 driver = "lancedb"
@@ -33,3 +37,9 @@ driver = "local"
 [central]
 vdb_driver = "pgvector"
 kg_driver = "neo4j"
+
+[taxonomy]
+version = "1.0"
+
+[federation]
+global_overlays = []

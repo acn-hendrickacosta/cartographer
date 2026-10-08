@@ -51,7 +51,7 @@ Pack content itself (standards/skills/agents for all 12 bundled packs plus a 13t
 
 ## Running locally
 
-**Prerequisite: the Postgres container.** The backend needs `DATABASE_URL` reachable (default in `.env.local` points at `localhost:5433`). Start it via `cli/tests/docker-compose.yml` if it isn't already running (`docker compose -f cli/tests/docker-compose.yml up -d pgvector`), and create the `cartographer_webapp` database + `registry_tokens` table once if they don't exist yet:
+**Prerequisite: the Postgres container.** The backend needs `DATABASE_URL` reachable (default in `.env.local` points at `localhost:5433`). Start it via `cli/tests/docker-compose.yml` if it isn't already running (`docker compose -f cli/tests/docker-compose.yml up -d pgvector`), and create the `cartographer_webapp` database + schema once if they don't exist yet. **This copy was stale** (missing `drafts`/`draft_comments`/`packs`, and `registry_tokens` was missing `last_used_at` -- added SR.4, see `app/tokens.py`'s docstring, which is the authoritative source; each module's own docstring for its table, not this file, is canonical):
 
 ```bash
 docker exec ci-pgvector-1 psql -U cartographer -d postgres -c "CREATE DATABASE cartographer_webapp;"
@@ -60,7 +60,32 @@ CREATE TABLE registry_tokens (
     token_hash TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    revoked_at TIMESTAMPTZ
+    revoked_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ
+);
+CREATE TABLE drafts (
+    id TEXT PRIMARY KEY,
+    pack_name TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    target_version TEXT NOT NULL,
+    author_email TEXT NOT NULL,
+    content TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'DRAFT',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE draft_comments (
+    id TEXT PRIMARY KEY,
+    draft_id TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+    author_email TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE packs (
+    name TEXT PRIMARY KEY,
+    deprecated_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );"
 ```
 

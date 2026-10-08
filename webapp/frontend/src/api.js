@@ -32,6 +32,10 @@ export function getMe() {
   return request('/api/me');
 }
 
+export function login(email, password) {
+  return request('/api/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+}
+
 export function getPacks(contentType) {
   return request(`/api/packs?type=${encodeURIComponent(contentType)}`);
 }
